@@ -1,24 +1,48 @@
 from __future__ import annotations
 
-import argparse
 import csv
 import datetime as dt
-import glob
+import shlex
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 
-DEFAULT_LOCAL_DIR = Path("generated/slurm_jobs")
-DEFAULT_RESULTS_ROOT = Path("generated/cluster_runs")
-DEFAULT_REMOTE_ROOT = Path("generated/cluster_runs")
+RESULT_FIELDS = [
+    "script",
+    "slurm_job_id",
+    "source_job_id",
+    "planned_sleep_seconds",
+    "requested_slurm_time",
+    "submitted_observed_at",
+    "completed_observed_at",
+    "slurm_submit_time",
+    "slurm_start_time",
+    "slurm_end_time",
+    "slurm_state",
+    "node_list",
+    "queue_wait_seconds",
+    "actual_slurm_runtime_seconds",
+    "observed_wall_seconds",
+    "overhead_vs_sleep_percent",
+]
 
 
-def positive_float(value: str) -> float:
-    parsed = float(value)
-    if parsed <= 0:
-        raise argparse.ArgumentTypeError("value must be positive")
-    return parsed
+@dataclass(frozen=True)
+class RemoteRun:
+    local_run_dir: Path
+    remote_run_dir: str
+    manifest_path: Path
+
+
+def shell_quote(value: str | Path) -> str:
+    raw = str(value)
+    if raw == "~":
+        return raw
+    if raw.startswith("~/"):
+        return "~/" + shlex.quote(raw[2:])
+    return shlex.quote(raw)
 
 
 def run_command(command: list[str]) -> str:
@@ -37,8 +61,8 @@ def try_ssh(host: str, command: str) -> str:
         return ""
 
 
-def scp_to(files: list[Path], target: str) -> None:
-    subprocess.run(["scp", *[str(path) for path in files], target], check=True)
+def scp_from(source: str, target: Path) -> None:
+    subprocess.run(["scp", source, str(target)], check=True)
 
 
 def timestamp() -> str:
@@ -72,27 +96,56 @@ def read_manifest(path: Path) -> dict[str, dict[str, str]]:
         return {row["script"]: row for row in csv.DictReader(input_file)}
 
 
-RESULT_FIELDS = [
-    "script",
-    "slurm_job_id",
-    "source_job_id",
-    "planned_sleep_seconds",
-    "requested_slurm_time",
-    "submitted_observed_at",
-    "completed_observed_at",
-    "slurm_submit_time",
-    "slurm_start_time",
-    "slurm_end_time",
-    "slurm_state",
-    "node_list",
-    "queue_wait_seconds",
-    "actual_slurm_runtime_seconds",
-    "observed_wall_seconds",
-    "overhead_vs_sleep_percent",
-]
+def run_remote_generator(
+    host: str,
+    generator_dir: str,
+    generator_command: str,
+    results_root: Path,
+) -> RemoteRun:
+    run_id = "run_" + dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    local_run_dir = results_root / run_id
+    local_run_dir.mkdir(parents=True, exist_ok=True)
+
+    remote_run_dir = ssh(
+        host,
+        "cd "
+        f"{shell_quote(generator_dir)} && "
+        f"{generator_command} --run-id {shell_quote(run_id)}",
+    )
+    if not remote_run_dir:
+        raise SystemExit("remote generator did not print remote run directory")
+
+    manifest_path = local_run_dir / "manifest.csv"
+    scp_from(f"{host}:{remote_run_dir}/manifest.csv", manifest_path)
+    return RemoteRun(
+        local_run_dir=local_run_dir,
+        remote_run_dir=remote_run_dir,
+        manifest_path=manifest_path,
+    )
 
 
-def build_result_row(host: str, submitted_row: dict[str, str], manifest_row: dict[str, str]) -> dict[str, str | int]:
+def copy_existing_manifest(
+    host: str,
+    remote_run_dir: str,
+    results_root: Path,
+) -> RemoteRun:
+    run_id = Path(remote_run_dir.rstrip("/")).name
+    local_run_dir = results_root / run_id
+    local_run_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = local_run_dir / "manifest.csv"
+    scp_from(f"{host}:{remote_run_dir}/manifest.csv", manifest_path)
+    return RemoteRun(
+        local_run_dir=local_run_dir,
+        remote_run_dir=remote_run_dir,
+        manifest_path=manifest_path,
+    )
+
+
+def build_result_row(
+    host: str,
+    submitted_row: dict[str, str],
+    manifest_row: dict[str, str],
+) -> dict[str, str | int]:
     completed_at = timestamp()
     slurm_raw = try_ssh(host, f"scontrol show job {submitted_row['slurm_job_id']} -o")
     slurm = parse_slurm_fields(slurm_raw)
@@ -125,9 +178,15 @@ def build_result_row(host: str, submitted_row: dict[str, str], manifest_row: dic
         "slurm_state": slurm.get("JobState", "UNKNOWN"),
         "node_list": slurm.get("NodeList", ""),
         "queue_wait_seconds": f"{queue_wait:.3f}" if queue_wait is not None else "",
-        "actual_slurm_runtime_seconds": f"{actual_runtime:.3f}" if actual_runtime is not None else "",
-        "observed_wall_seconds": f"{observed_wall:.3f}" if observed_wall is not None else "",
-        "overhead_vs_sleep_percent": f"{overhead:.3f}" if overhead is not None else "",
+        "actual_slurm_runtime_seconds": (
+            f"{actual_runtime:.3f}" if actual_runtime is not None else ""
+        ),
+        "observed_wall_seconds": (
+            f"{observed_wall:.3f}" if observed_wall is not None else ""
+        ),
+        "overhead_vs_sleep_percent": (
+            f"{overhead:.3f}" if overhead is not None else ""
+        ),
     }
 
 
@@ -164,38 +223,26 @@ def collect_results_as_jobs_finish(
                 time.sleep(poll_interval)
 
 
-def run_cluster_jobs(
+def submit_remote_run(
     host: str,
-    local_dir: Path,
-    results_root: Path,
-    remote_root: Path,
+    remote_run_dir: str,
+    local_run_dir: Path,
+    manifest_path: Path,
     poll_interval: float,
 ) -> Path:
-    manifest_path = local_dir / "manifest.csv"
-    if not manifest_path.exists():
-        raise SystemExit(f"manifest not found: {manifest_path}")
-
-    scripts = sorted(Path(path) for path in glob.glob(str(local_dir / "*.slurm")))
-    if not scripts:
-        raise SystemExit(f"no .slurm files found in {local_dir}")
-
-    run_id = "run_" + dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    local_run_dir = results_root / run_id
-    remote_run_dir = remote_root / run_id
-    local_run_dir.mkdir(parents=True, exist_ok=True)
-
-    ssh(host, f"rm -rf {remote_run_dir} && mkdir -p {remote_run_dir}/slurm_jobs")
-    scp_to(scripts, f"{host}:{remote_run_dir}/slurm_jobs/")
-    scp_to([manifest_path], f"{host}:{remote_run_dir}/manifest.csv")
-
     manifest = read_manifest(manifest_path)
     submitted: list[dict[str, str]] = []
-    for script in scripts:
+    for script_name in sorted(manifest):
         submitted_at = timestamp()
-        job_id = ssh(host, f"cd {remote_run_dir} && sbatch --parsable slurm_jobs/{script.name}")
+        job_id = ssh(
+            host,
+            "cd "
+            f"{shell_quote(remote_run_dir)} && "
+            f"sbatch --parsable {shell_quote(Path('slurm_jobs') / script_name)}",
+        )
         submitted.append(
             {
-                "script": script.name,
+                "script": script_name,
                 "slurm_job_id": job_id,
                 "submitted_observed_at": submitted_at,
             }
@@ -209,33 +256,4 @@ def run_cluster_jobs(
         result_path=result_path,
         poll_interval=poll_interval,
     )
-
-    print(f"submitted={len(submitted)}")
-    print(f"remote_run_dir={remote_run_dir}")
-    print(f"results={result_path}")
     return result_path
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Submit generated SLURM jobs and collect runtime measurements.")
-    parser.add_argument("--host", default="mgmt")
-    parser.add_argument("--local-dir", type=Path, default=DEFAULT_LOCAL_DIR)
-    parser.add_argument("--results-root", type=Path, default=DEFAULT_RESULTS_ROOT)
-    parser.add_argument("--remote-root", type=Path, default=DEFAULT_REMOTE_ROOT)
-    parser.add_argument("--poll-interval", type=positive_float, default=1.0)
-    return parser.parse_args()
-
-
-def main() -> None:
-    args = parse_args()
-    run_cluster_jobs(
-        host=args.host,
-        local_dir=args.local_dir,
-        results_root=args.results_root,
-        remote_root=args.remote_root,
-        poll_interval=args.poll_interval,
-    )
-
-
-if __name__ == "__main__":
-    main()

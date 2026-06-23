@@ -5,10 +5,14 @@ import json
 from pathlib import Path
 from typing import Any
 
-from src.analyze.analyze import print_summary, read_jobs
+from src.analyze.analyze import print_summary
 from src.analyze.graphs import build_graphs
-from src.generate.generate import GenerateConfig, generate_jobs
-from src.generate.run_cluster import run_cluster_jobs
+from src.core.jobs import read_jobs
+from src.pipeline.cluster import (
+    copy_existing_manifest,
+    run_remote_generator,
+    submit_remote_run,
+)
 
 
 DEFAULT_CONFIG = Path("config/pipeline.json")
@@ -39,20 +43,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument(
-        "--skip-cluster",
+        "--analyze-only",
         action="store_true",
-        help="Generate scripts and graphs without submitting jobs to Slurm.",
+        help="Build graphs from existing local manifest/results without touching Slurm.",
     )
     parser.add_argument(
         "--no-graphs",
         action="store_true",
         help="Skip graph generation after analysis.",
     )
-    parser.add_argument(
-        "--count",
-        type=positive_int,
-        help="Override generate.count from the config for quick test runs.",
-    )
+    parser.add_argument("--count", type=positive_int, help="Override configured count.")
+    parser.add_argument("--remote-run-dir", help="Use an existing generated run on VM.")
     return parser.parse_args()
 
 
@@ -61,63 +62,80 @@ def main() -> None:
     config = load_config(args.config)
 
     dataset_path = path_from_config(config, "dataset")
-    generate_config = config.get("generate", {})
+    generator_config = config.get("remote_generator", {})
     cluster_config = config.get("cluster", {})
     analyze_config = config.get("analyze", {})
 
     count = (
         args.count
         if args.count is not None
-        else int(generate_config.get("count", 20))
+        else int(generator_config.get("count", 20))
     )
-    output_dir = Path(generate_config.get("output_dir", "generated/slurm_jobs"))
     graphs_dir = Path(analyze_config.get("graphs_dir", "generated/graphs"))
+    results_root = Path(cluster_config.get("results_root", "generated/cluster_runs"))
 
     jobs = read_jobs(dataset_path)
     if not jobs:
         raise SystemExit(f"no jobs read from {dataset_path}")
 
-    print(f"stage=generate dataset={dataset_path} count={count}")
-    runtime_distribution, manifest_path = generate_jobs(
-        source_jobs=jobs,
-        config=GenerateConfig(
-            output_dir=output_dir,
-            count=count,
-            sleep_scale=float(generate_config.get("sleep_scale", 0.01)),
-            time_scale=float(generate_config.get("time_scale", 0.01)),
-            seed=int(generate_config.get("seed", 50728)),
-            partition=str(generate_config.get("partition", "debug")),
-            max_nodes=int(generate_config.get("max_nodes", 4)),
-        ),
-    )
-    print(f"generated_manifest={manifest_path}")
-    for index, component in enumerate(runtime_distribution.components, start=1):
-        print(f"runtime_component_{index}_mu={component.mu:.6f}")
-        print(f"runtime_component_{index}_sigma={component.sigma:.6f}")
-        print(
-            f"runtime_component_{index}_weight="
-            f"{runtime_distribution.weights[index - 1]:.6f}"
+    manifest_path = Path("generated/slurm_jobs/manifest.csv")
+    cluster_results_path: Path | None = None
+
+    if not args.analyze_only and bool(cluster_config.get("enabled", False)):
+        host = str(cluster_config.get("host", generator_config.get("host", "mgmt")))
+        remote_run_dir = (
+            args.remote_run_dir
+            or str(cluster_config.get("remote_run_dir") or "").strip()
         )
 
-    cluster_results_path: Path | None = None
-    should_run_cluster = (
-        bool(cluster_config.get("enabled", False)) and not args.skip_cluster
-    )
-    if should_run_cluster:
-        print(f"stage=cluster host={cluster_config.get('host', 'mgmt')}")
-        cluster_results_path = run_cluster_jobs(
-            host=str(cluster_config.get("host", "mgmt")),
-            local_dir=output_dir,
-            results_root=Path(
-                cluster_config.get("results_root", "generated/cluster_runs")
-            ),
-            remote_root=Path(
-                cluster_config.get("remote_root", "generated/cluster_runs")
-            ),
+        if remote_run_dir:
+            print(f"stage=manifest host={host} remote_run_dir={remote_run_dir}")
+            remote_run = copy_existing_manifest(
+                host=host,
+                remote_run_dir=remote_run_dir,
+                results_root=results_root,
+            )
+        else:
+            generator_host = str(generator_config.get("host", host))
+            generator_dir = str(generator_config.get("generator_dir", "~/slurm-generator"))
+            generator_command = (
+                str(generator_config.get("command", "python3 -m generate.main"))
+                + f" --count {count}"
+                + f" --sleep-scale {float(generator_config.get('sleep_scale', 0.01))}"
+                + f" --time-scale {float(generator_config.get('time_scale', 0.01))}"
+                + f" --seed {int(generator_config.get('seed', 50728))}"
+                + f" --partition {str(generator_config.get('partition', 'debug'))}"
+                + f" --max-nodes {int(generator_config.get('max_nodes', 4))}"
+            )
+            print(
+                f"stage=generate host={generator_host} "
+                f"generator_dir={generator_dir} count={count}"
+            )
+            remote_run = run_remote_generator(
+                host=generator_host,
+                generator_dir=generator_dir,
+                generator_command=generator_command,
+                results_root=results_root,
+            )
+
+        manifest_path = remote_run.manifest_path
+        print(f"generated_manifest={manifest_path}")
+        print(f"remote_run_dir={remote_run.remote_run_dir}")
+
+        print(f"stage=cluster host={host}")
+        cluster_results_path = submit_remote_run(
+            host=host,
+            remote_run_dir=remote_run.remote_run_dir,
+            local_run_dir=remote_run.local_run_dir,
+            manifest_path=manifest_path,
             poll_interval=float(cluster_config.get("poll_interval", 1.0)),
         )
     else:
         print("stage=cluster skipped=true")
+        latest_results = sorted(results_root.glob("run_*/results.csv"))
+        if latest_results:
+            cluster_results_path = latest_results[-1]
+            manifest_path = cluster_results_path.parent / "manifest.csv"
 
     print("stage=analyze")
     print_summary(jobs)

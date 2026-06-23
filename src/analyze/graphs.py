@@ -6,15 +6,14 @@ import math
 import os
 import re
 import shutil
+import statistics
 from pathlib import Path
 
-from src.analyze.analyze import (
+from src.core.jobs import (
     LognormalMixture,
     SourceJob,
     elapsed_times,
     fit_elapsed_mixture,
-    fit_forecast_error_mixture,
-    forecast_errors,
     summarize_jobs,
 )
 
@@ -97,43 +96,6 @@ def clean_graphs_dir(output_dir: Path) -> None:
             shutil.rmtree(path)
         else:
             path.unlink()
-
-
-def plot_forecast_error_fit(
-    jobs: list[SourceJob], output_dir: Path, bins: int = 40
-) -> Path:
-    plt = _import_pyplot()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / "forecast_error_fit.png"
-    errors = forecast_errors(jobs)
-    mixture = fit_forecast_error_mixture(jobs, bins=bins)
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.hist(
-        errors,
-        bins=bins,
-        color="#72b7b2",
-        edgecolor="white",
-        alpha=0.85,
-        label="исходные ошибки прогноза",
-    )
-    _plot_pdf(ax, mixture, errors, bins)
-    ax.set_title("Распределение ошибки прогноза времени")
-    ax.set_xlabel("TimelimitRaw * 60 - ElapsedRaw, секунд")
-    ax.set_ylabel("количество задач")
-    ax.legend()
-
-    text = "\n".join(
-        f"компонента {index}: mu={component.mu:.4f}, sigma={component.sigma:.4f}, вес={weight:.3f}"
-        for index, (component, weight) in enumerate(
-            zip(mixture.components, mixture.weights), start=1
-        )
-    )
-    ax.text(0.02, 0.95, text, transform=ax.transAxes, va="top", fontsize=9)
-    fig.tight_layout()
-    fig.savefig(path, dpi=160)
-    plt.close(fig)
-    return path
 
 
 def plot_runtime_fit(jobs: list[SourceJob], output_dir: Path, bins: int = 40) -> Path:
@@ -275,10 +237,9 @@ def plot_execution_overhead(
     return path
 
 
-def plot_cluster_runtime_spread(results_path: Path, output_dir: Path) -> Path | None:
-    plt = _import_pyplot()
+def _read_cluster_runtime_rows(results_path: Path) -> list[dict[str, str]]:
     if not results_path.exists():
-        return None
+        return []
 
     rows = []
     with results_path.open(newline="", encoding="utf-8") as input_file:
@@ -286,42 +247,207 @@ def plot_cluster_runtime_spread(results_path: Path, output_dir: Path) -> Path | 
             if not row.get("actual_slurm_runtime_seconds"):
                 continue
             rows.append(row)
+    return rows
+
+
+def _cluster_runtime_series(
+    rows: list[dict[str, str]],
+) -> tuple[list[int], list[float], list[float], list[float]]:
+    indexes = [int(row["script"].split("_")[1]) for row in rows]
+    planned = [float(row["planned_sleep_seconds"]) for row in rows]
+    actual = [float(row["actual_slurm_runtime_seconds"]) for row in rows]
+    overhead = [float(row["overhead_vs_sleep_percent"]) for row in rows]
+    return indexes, planned, actual, overhead
+
+
+def plot_cluster_runtime_spread(results_path: Path, output_dir: Path) -> Path | None:
+    plt = _import_pyplot()
+    rows = _read_cluster_runtime_rows(results_path)
 
     if not rows:
         return None
 
     print(f"rows={len(rows)}")
 
-    indexes = [int(row["script"].split("_")[1]) for row in rows]
-    planned = [float(row["planned_sleep_seconds"]) for row in rows]
-    actual = [float(row["actual_slurm_runtime_seconds"]) for row in rows]
-    overhead = [float(row["overhead_vs_sleep_percent"]) for row in rows]
+    indexes, planned, actual, overhead = _cluster_runtime_series(rows)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / "actual_runtime_spread.png"
 
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig, axes = plt.subplots(2, 2, figsize=(14, 9))
+    flat_axes = axes.flatten()
 
-    axes[0].plot(
-        indexes, planned, marker="o", linewidth=1.5, label="запланированный sleep"
+    lower = min(min(planned), min(actual))
+    upper = max(max(planned), max(actual))
+    flat_axes[0].scatter(planned, actual, s=26, alpha=0.65, color="#4c78a8")
+    flat_axes[0].plot(
+        [lower, upper],
+        [lower, upper],
+        color="#d62728",
+        linewidth=1.5,
+        linestyle="--",
+        label="факт = план",
     )
-    axes[0].plot(
-        indexes, actual, marker="o", linewidth=1.5, label="фактическое время Slurm"
-    )
-    axes[0].set_title("Плановое и фактическое время выполнения")
-    axes[0].set_xlabel("номер задачи")
-    axes[0].set_ylabel("секунд")
-    axes[0].legend()
+    flat_axes[0].set_title("Плановое и фактическое время")
+    flat_axes[0].set_xlabel("запланированный sleep, секунд")
+    flat_axes[0].set_ylabel("фактическое время Slurm, секунд")
+    flat_axes[0].legend()
 
-    axes[1].bar(indexes, overhead, color="#f58518")
-    axes[1].axhline(
+    flat_axes[1].hist(
+        overhead,
+        bins=min(30, max(5, len(overhead) // 8)),
+        color="#f58518",
+        edgecolor="white",
+    )
+    flat_axes[1].axvline(
         3.0, color="#d62728", linestyle="--", linewidth=1.5, label="порог 3%"
     )
-    axes[1].set_title("Отклонение фактического времени")
-    axes[1].set_xlabel("номер задачи")
-    axes[1].set_ylabel("(факт - sleep) / sleep, %")
-    axes[1].legend()
+    flat_axes[1].set_title("Распределение отклонения")
+    flat_axes[1].set_xlabel("(факт - sleep) / sleep, %")
+    flat_axes[1].set_ylabel("количество задач")
+    flat_axes[1].legend()
 
+    group_size = max(1, math.ceil(len(indexes) / 20))
+    grouped_indexes: list[float] = []
+    grouped_planned: list[float] = []
+    grouped_actual: list[float] = []
+    grouped_overhead: list[float] = []
+    for start in range(0, len(indexes), group_size):
+        end = start + group_size
+        grouped_indexes.append(statistics.mean(indexes[start:end]))
+        grouped_planned.append(statistics.median(planned[start:end]))
+        grouped_actual.append(statistics.median(actual[start:end]))
+        grouped_overhead.append(statistics.median(overhead[start:end]))
+
+    flat_axes[2].plot(
+        grouped_indexes,
+        grouped_planned,
+        marker="o",
+        linewidth=1.8,
+        label="медиана planned sleep",
+    )
+    flat_axes[2].plot(
+        grouped_indexes,
+        grouped_actual,
+        marker="o",
+        linewidth=1.8,
+        label="медиана факта",
+    )
+    flat_axes[2].set_title(f"Медианы по группам задач, группа до {group_size}")
+    flat_axes[2].set_xlabel("номер задачи")
+    flat_axes[2].set_ylabel("секунд")
+    flat_axes[2].legend()
+
+    flat_axes[3].plot(
+        grouped_indexes,
+        grouped_overhead,
+        marker="o",
+        linewidth=1.8,
+        color="#54a24b",
+        label="медиана отклонения",
+    )
+    flat_axes[3].axhline(
+        3.0, color="#d62728", linestyle="--", linewidth=1.5, label="порог 3%"
+    )
+    flat_axes[3].set_title("Медианное отклонение по группам")
+    flat_axes[3].set_xlabel("номер задачи")
+    flat_axes[3].set_ylabel("(факт - sleep) / sleep, %")
+    flat_axes[3].legend()
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+    return path
+
+
+def plot_cluster_planned_actual_by_job(
+    results_path: Path, output_dir: Path
+) -> Path | None:
+    plt = _import_pyplot()
+    rows = _read_cluster_runtime_rows(results_path)
+    if not rows:
+        return None
+
+    indexes, planned, actual, _ = _cluster_runtime_series(rows)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / "planned_vs_actual_by_job.png"
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    ax.scatter(indexes, planned, s=18, alpha=0.55, color="#4c78a8")
+    ax.scatter(indexes, actual, s=18, alpha=0.55, color="#f58518")
+
+    group_size = max(1, math.ceil(len(indexes) / 20))
+    grouped_indexes: list[float] = []
+    grouped_planned: list[float] = []
+    grouped_actual: list[float] = []
+    for start in range(0, len(indexes), group_size):
+        end = start + group_size
+        grouped_indexes.append(statistics.mean(indexes[start:end]))
+        grouped_planned.append(statistics.median(planned[start:end]))
+        grouped_actual.append(statistics.median(actual[start:end]))
+
+    ax.plot(
+        grouped_indexes,
+        grouped_planned,
+        color="#4c78a8",
+        linewidth=2.2,
+        marker="o",
+        label="запланированный sleep",
+    )
+    ax.plot(
+        grouped_indexes,
+        grouped_actual,
+        color="#f58518",
+        linewidth=2.2,
+        marker="o",
+        label="фактическое время Slurm",
+    )
+    ax.set_title("Плановое и фактическое время по задачам")
+    ax.set_xlabel("номер задачи")
+    ax.set_ylabel("секунд")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+    return path
+
+
+def plot_cluster_overhead_by_job(results_path: Path, output_dir: Path) -> Path | None:
+    plt = _import_pyplot()
+    rows = _read_cluster_runtime_rows(results_path)
+    if not rows:
+        return None
+
+    indexes, _, _, overhead = _cluster_runtime_series(rows)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / "actual_overhead_by_job.png"
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    ax.scatter(indexes, overhead, s=18, alpha=0.55, color="#54a24b")
+
+    group_size = max(1, math.ceil(len(indexes) / 20))
+    grouped_indexes: list[float] = []
+    grouped_overhead: list[float] = []
+    for start in range(0, len(indexes), group_size):
+        end = start + group_size
+        grouped_indexes.append(statistics.mean(indexes[start:end]))
+        grouped_overhead.append(statistics.median(overhead[start:end]))
+
+    ax.plot(
+        grouped_indexes,
+        grouped_overhead,
+        color="#54a24b",
+        linewidth=2.2,
+        marker="o",
+        label="медиана по группам",
+    )
+    ax.axhline(
+        3.0, color="#d62728", linestyle="--", linewidth=1.5, label="порог 3%"
+    )
+    ax.set_title("Отклонение фактического времени по задачам")
+    ax.set_xlabel("номер задачи")
+    ax.set_ylabel("(факт - sleep) / sleep, %")
+    ax.legend()
     fig.tight_layout()
     fig.savefig(path, dpi=160)
     plt.close(fig)
@@ -350,4 +476,12 @@ def build_graphs(
         spread = plot_cluster_runtime_spread(cluster_results_path, output_dir)
         if spread:
             paths.append(spread)
+        planned_actual = plot_cluster_planned_actual_by_job(
+            cluster_results_path, output_dir
+        )
+        if planned_actual:
+            paths.append(planned_actual)
+        overhead_by_job = plot_cluster_overhead_by_job(cluster_results_path, output_dir)
+        if overhead_by_job:
+            paths.append(overhead_by_job)
     return paths
