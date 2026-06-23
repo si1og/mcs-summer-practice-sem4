@@ -1,0 +1,22 @@
+{
+  "dataset": "dataset/acct_0921-0923_uid50728_qe7",
+  "generate": {
+    "output_dir": "generated/slurm_jobs",
+    "count": 200,
+    "sleep_scale": 0.01,
+    "time_scale": 0.01,
+    "seed": 50728,
+    "partition": "debug",
+    "max_nodes": 4
+  },
+  "cluster": {
+    "enabled": true,
+    "host": "mgmt",
+    "results_root": "generated/cluster_runs",
+    "remote_root": "generated/cluster_runs",
+    "poll_interval": 1.0
+  },
+  "analyze": {
+    "graphs_dir": "generated/graphs"
+  }
+}
