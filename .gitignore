@@ -1,6 +1,7 @@
 docs/installer/
 .DS_Store
-generated/
+generated/*
+!generated/graphs*
 __pycache__/
 *.py[cod]
 .~lock.*#

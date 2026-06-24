@@ -10,10 +10,10 @@ import statistics
 from pathlib import Path
 
 from src.core.jobs import (
-    LognormalMixture,
+    LognormalFit,
     SourceJob,
     elapsed_times,
-    fit_elapsed_mixture,
+    fit_elapsed_lognormal,
     summarize_jobs,
 )
 
@@ -45,19 +45,14 @@ def _histogram(values: list[int], bins: int) -> tuple[list[float], list[int], fl
     return centers, counts, width
 
 
-def _plot_pdf(ax, mixture: LognormalMixture, values: list[int], bins: int) -> None:
+def _plot_pdf(ax, fit: LognormalFit, values: list[int], bins: int) -> None:
     lower = max(1, min(values))
     upper = max(values)
     step = (upper - lower) / 300
     xs = [lower + step * index for index in range(301)]
     _, _, bin_width = _histogram(values, bins)
-    ys = [mixture.pdf(x) * len(values) * bin_width for x in xs]
-    label = (
-        "логнормальная аппроксимация"
-        if mixture.component_count == 1
-        else "смесь логнормальных распределений"
-    )
-    ax.plot(xs, ys, color="#d62728", linewidth=2.0, label=label)
+    ys = [fit.pdf(x) * len(values) * bin_width for x in xs]
+    ax.plot(xs, ys, color="#d62728", linewidth=2.0, label="логнормальная аппроксимация")
 
 
 def plot_source_summary(jobs: list[SourceJob], output_dir: Path) -> Path:
@@ -103,7 +98,7 @@ def plot_runtime_fit(jobs: list[SourceJob], output_dir: Path, bins: int = 40) ->
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / "runtime_fit.png"
     runtimes = elapsed_times(jobs)
-    mixture = fit_elapsed_mixture(jobs, bins=bins)
+    fit = fit_elapsed_lognormal(jobs)
 
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.hist(
@@ -114,18 +109,13 @@ def plot_runtime_fit(jobs: list[SourceJob], output_dir: Path, bins: int = 40) ->
         alpha=0.85,
         label="исходные длительности задач",
     )
-    _plot_pdf(ax, mixture, runtimes, bins)
+    _plot_pdf(ax, fit, runtimes, bins)
     ax.set_title("Распределение длительности задач")
     ax.set_xlabel("ElapsedRaw, секунд")
     ax.set_ylabel("количество задач")
     ax.legend()
 
-    text = "\n".join(
-        f"компонента {index}: mu={component.mu:.4f}, sigma={component.sigma:.4f}, вес={weight:.3f}"
-        for index, (component, weight) in enumerate(
-            zip(mixture.components, mixture.weights), start=1
-        )
-    )
+    text = f"mu={fit.mu:.4f}\nsigma={fit.sigma:.4f}"
     ax.text(0.02, 0.95, text, transform=ax.transAxes, va="top", fontsize=9)
     fig.tight_layout()
     fig.savefig(path, dpi=160)
