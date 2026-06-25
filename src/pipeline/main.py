@@ -109,7 +109,6 @@ def main() -> None:
                 + f" --error-sigma {float(generator_config.get('error_sigma', 0.0371))}"
                 + f" --seed {int(generator_config.get('seed', 50728))}"
                 + f" --partition {str(generator_config.get('partition', 'debug'))}"
-                + f" --max-nodes {int(generator_config.get('max_nodes', 4))}"
             )
             print(
                 f"stage=generate host={generator_host} "
