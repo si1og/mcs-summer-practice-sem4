@@ -1,16 +1,16 @@
 {
   "dataset": "dataset/acct_0921-0923_uid50728_qe7",
   "remote_generator": {
-    "count": 200,
-    "sleep_scale": 0.01,
-    "time_scale": 0.01,
+    "count": 500,
+    "sleep_scale": 0.045,
+    "time_scale": 0.045,
     "runtime_components": [
-      {"mu": 7.406794, "sigma": 0.012051, "weight": 0.808736},
-      {"mu": 7.562539, "sigma": 0.00981, "weight": 0.191264}
+      { "mean": 1647.256956, "sigma": 19.887558, "weight": 0.808736 },
+      { "mean": 1924.816608, "sigma": 18.697678, "weight": 0.191264 }
     ],
     "error_components": [
-      {"mu": 9.887107, "sigma": 0.001382, "weight": 0.191928},
-      {"mu": 9.901119, "sigma": 0.00141, "weight": 0.808072}
+      { "mu": 9.887107, "sigma": 0.001382, "weight": 0.191928 },
+      { "mu": 9.901119, "sigma": 0.00141, "weight": 0.808072 }
     ],
     "seed": 50728,
     "partition": "debug",

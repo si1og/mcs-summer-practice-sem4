@@ -45,6 +45,14 @@ def component_args(option: str, components: list[dict[str, Any]]) -> str:
     )
 
 
+def normal_component_args(option: str, components: list[dict[str, Any]]) -> str:
+    return "".join(
+        f" {option} "
+        f"{float(component['mean'])},{float(component['sigma'])},{float(component['weight'])}"
+        for component in components
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run generation, optional Slurm execution, and analysis synchronously."
@@ -108,7 +116,7 @@ def main() -> None:
             generator_dir = str(generator_config.get("generator_dir", "~/slurm-generator"))
             runtime_components = generator_config.get(
                 "runtime_components",
-                [{"mu": 7.418158, "sigma": 0.283774, "weight": 1.0}],
+                [{"mean": 1701.49, "sigma": 435.21, "weight": 1.0}],
             )
             error_components = generator_config.get(
                 "error_components",
@@ -119,7 +127,7 @@ def main() -> None:
                 + f" --count {count}"
                 + f" --sleep-scale {float(generator_config.get('sleep_scale', 0.01))}"
                 + f" --time-scale {float(generator_config.get('time_scale', 0.01))}"
-                + component_args("--runtime-component", runtime_components)
+                + normal_component_args("--runtime-normal-component", runtime_components)
                 + component_args("--error-component", error_components)
                 + f" --seed {int(generator_config.get('seed', 50728))}"
                 + f" --partition {str(generator_config.get('partition', 'debug'))}"

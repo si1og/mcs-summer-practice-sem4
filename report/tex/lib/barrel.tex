@@ -1,12 +1,29 @@
-\usepackage[14pt]{extsizes}
-\usepackage[T2A]{fontenc}
-\usepackage[utf8]{inputenc}
 \usepackage[russian]{babel}
+\usepackage{fontspec}
+\setmainfont{Times New Roman}
+\setsansfont{Times New Roman}
+\setmonofont{Courier New}[Scale=MatchLowercase]
 \usepackage{geometry}
-\geometry{left=2.5cm, right=2.5cm, top=2cm, bottom=2cm}
-\usepackage[small]{titlesec}
+\geometry{left=30mm, right=15mm, top=20mm, bottom=20mm}
+\usepackage{setspace}
+\onehalfspacing
+\setlength{\parindent}{1.25cm}
+\setlength{\parskip}{0pt}
+\emergencystretch=2em
+\usepackage{titlesec}
+\newcommand{\sectionTitleFont}{\normalfont\bfseries\fontsize{16pt}{19pt}\selectfont}
+\newcommand{\subsectionTitleFont}{\normalfont\bfseries\fontsize{15pt}{18pt}\selectfont}
+\titleformat{\section}{\sectionTitleFont}{\thesection}{1em}{}
+\titleformat{name=\section,numberless}{\sectionTitleFont}{}{0pt}{}
+\titleformat{\subsection}{\subsectionTitleFont}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}{\normalfont\bfseries\normalsize}{\thesubsubsection}{1em}{}
+\titlespacing*{\section}{1.25cm}{0pt}{12pt}
+\titlespacing*{name=\section,numberless}{1.25cm}{0pt}{12pt}
+\titlespacing*{\subsection}{1.25cm}{12pt}{6pt}
 \usepackage{enumitem}
+\setlist{nosep, leftmargin=1.25cm}
 
+\usepackage{graphicx}
 \usepackage{tikz}
 \usetikzlibrary{shapes.geometric}
 \usetikzlibrary{calc}
@@ -16,6 +33,16 @@
 \usepackage{amsmath}
 \usepackage{amssymb}
 \usepackage{caption}
+\DeclareCaptionLabelSeparator{gostdash}{ -- }
+\captionsetup{
+    labelsep=gostdash,
+    justification=centering,
+    singlelinecheck=false,
+    font=normalsize,
+}
+\addto\captionsrussian{\renewcommand{\contentsname}{Содержание}}
+\addto\captionsrussian{\renewcommand{\figurename}{Рисунок}}
+\addto\captionsrussian{\renewcommand{\refname}{Список использованных источников}}
 \usepackage{multicol}
 \usepackage{float}
 \floatstyle{plaintop}
@@ -65,10 +92,12 @@
 \usepackage{xcolor}
 \usepackage[
     colorlinks=true,
-    linkcolor=blue,
-    urlcolor=blue,
-    citecolor=blue,
-    filecolor=blue,
+    linkcolor=black,
+    urlcolor=black,
+    citecolor=black,
+    filecolor=black,
     pdfborder={0 0 0}
 ]{hyperref}
+\pagestyle{plain}
+\sloppy
 \input{./tex/lib/macroses.tex}
