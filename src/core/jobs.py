@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import csv
 import math
+import os
 import statistics
+import warnings
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_DATASET = Path("dataset/acct_0921-0923_uid50728_qe7")
+os.environ.setdefault("LOKY_MAX_CPU_COUNT", str(os.cpu_count() or 1))
 
 
 @dataclass(frozen=True)
@@ -46,6 +49,18 @@ class LognormalFit:
         denominator = x * self.sigma * math.sqrt(2.0 * math.pi)
         exponent = -((math.log(x) - self.mu) ** 2) / (2.0 * self.sigma**2)
         return math.exp(exponent) / denominator
+
+
+@dataclass(frozen=True)
+class LognormalMixture:
+    components: tuple[LognormalFit, ...]
+    weights: tuple[float, ...]
+
+    def pdf(self, x: float) -> float:
+        return sum(
+            weight * component.pdf(x)
+            for component, weight in zip(self.components, self.weights)
+        )
 
 
 @dataclass(frozen=True)
@@ -90,11 +105,27 @@ def elapsed_times(jobs: list[SourceJob]) -> list[int]:
     return [job.elapsed_seconds for job in jobs if job.elapsed_seconds > 0]
 
 
+def completed_elapsed_times(jobs: list[SourceJob]) -> list[int]:
+    return [
+        job.elapsed_seconds
+        for job in jobs
+        if job.state == "COMPLETED" and job.elapsed_seconds > 0
+    ]
+
+
 def forecast_errors(jobs: list[SourceJob]) -> list[int]:
     return [job.forecast_error_seconds for job in jobs if job.forecast_error_seconds > 0]
 
 
-def fit_lognormal(values: list[int]) -> LognormalFit:
+def completed_forecast_errors(jobs: list[SourceJob]) -> list[int]:
+    return [
+        job.forecast_error_seconds
+        for job in jobs
+        if job.state == "COMPLETED" and job.forecast_error_seconds > 0
+    ]
+
+
+def fit_lognormal(values: list[int] | list[float]) -> LognormalFit:
     if len(values) < 2:
         raise ValueError(
             "need at least two positive values to fit a lognormal distribution"
@@ -107,12 +138,89 @@ def fit_lognormal(values: list[int]) -> LognormalFit:
     )
 
 
+def trim_tails(
+    values: list[int] | list[float], lower_quantile: float = 0.01, upper_quantile: float = 0.99
+) -> list[int] | list[float]:
+    if len(values) < 10:
+        return values
+    sorted_values = sorted(values)
+    lower_index = int(len(sorted_values) * lower_quantile)
+    upper_index = int(len(sorted_values) * upper_quantile)
+    trimmed = sorted_values[lower_index:upper_index]
+    return trimmed or values
+
+
+def fit_lognormal_mixture(
+    values: list[int] | list[float],
+    component_count: int = 2,
+    trim_outliers: bool = True,
+) -> LognormalMixture:
+    fit_values = trim_tails(values) if trim_outliers else values
+    if len(fit_values) < component_count * 2:
+        fit = fit_lognormal(fit_values)
+        return LognormalMixture((fit,), (1.0,))
+
+    try:
+        os.environ.setdefault("LOKY_MAX_CPU_COUNT", str(os.cpu_count() or 1))
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                category=UserWarning,
+                module=r"joblib\.externals\.loky\.backend\.context",
+            )
+            warnings.filterwarnings(
+                "ignore", message="Could not find the number of physical cores.*"
+            )
+            import numpy as np
+            from sklearn.mixture import GaussianMixture
+    except ModuleNotFoundError as error:
+        raise SystemExit(
+            "scikit-learn is required for lognormal mixture fitting. "
+            "Install dependencies with: python3 -m pip install -r requirements.txt"
+        ) from error
+
+    log_values = np.array([[math.log(value)] for value in fit_values if value > 0])
+    model = GaussianMixture(
+        n_components=component_count,
+        covariance_type="full",
+        n_init=1,
+        random_state=50728,
+    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Could not find the number of physical cores.*")
+        model.fit(log_values)
+
+    components: list[LognormalFit] = []
+    weights: list[float] = []
+    for weight, mean, covariance in zip(
+        model.weights_, model.means_.ravel(), model.covariances_.reshape(-1)
+    ):
+        components.append(
+            LognormalFit(mu=float(mean), sigma=math.sqrt(float(covariance)), count=0)
+        )
+        weights.append(float(weight))
+
+    ordered = sorted(zip(components, weights), key=lambda item: item[0].mu)
+    return LognormalMixture(
+        components=tuple(component for component, _ in ordered),
+        weights=tuple(weight for _, weight in ordered),
+    )
+
+
 def fit_elapsed_lognormal(jobs: list[SourceJob]) -> LognormalFit:
     return fit_lognormal(elapsed_times(jobs))
 
 
+def fit_elapsed_lognormal_mixture(jobs: list[SourceJob]) -> LognormalMixture:
+    return fit_lognormal_mixture(completed_elapsed_times(jobs), component_count=2)
+
+
 def fit_forecast_error_lognormal(jobs: list[SourceJob]) -> LognormalFit:
     return fit_lognormal(forecast_errors(jobs))
+
+
+def fit_forecast_error_lognormal_mixture(jobs: list[SourceJob]) -> LognormalMixture:
+    return fit_lognormal_mixture(completed_forecast_errors(jobs), component_count=2)
 
 
 def summarize_jobs(jobs: list[SourceJob]) -> DatasetSummary:

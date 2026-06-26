@@ -37,6 +37,14 @@ def path_from_config(config: dict[str, Any], key: str) -> Path:
     return Path(value)
 
 
+def component_args(option: str, components: list[dict[str, Any]]) -> str:
+    return "".join(
+        f" {option} "
+        f"{float(component['mu'])},{float(component['sigma'])},{float(component['weight'])}"
+        for component in components
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run generation, optional Slurm execution, and analysis synchronously."
@@ -98,15 +106,21 @@ def main() -> None:
         else:
             generator_host = str(generator_config.get("host", host))
             generator_dir = str(generator_config.get("generator_dir", "~/slurm-generator"))
+            runtime_components = generator_config.get(
+                "runtime_components",
+                [{"mu": 7.418158, "sigma": 0.283774, "weight": 1.0}],
+            )
+            error_components = generator_config.get(
+                "error_components",
+                [{"mu": 9.8981, "sigma": 0.0371, "weight": 1.0}],
+            )
             generator_command = (
                 str(generator_config.get("command", "python3 -m generate.main"))
                 + f" --count {count}"
                 + f" --sleep-scale {float(generator_config.get('sleep_scale', 0.01))}"
                 + f" --time-scale {float(generator_config.get('time_scale', 0.01))}"
-                + f" --runtime-mu {float(generator_config.get('runtime_mu', 7.418158))}"
-                + f" --runtime-sigma {float(generator_config.get('runtime_sigma', 0.283774))}"
-                + f" --error-mu {float(generator_config.get('error_mu', 9.8981))}"
-                + f" --error-sigma {float(generator_config.get('error_sigma', 0.0371))}"
+                + component_args("--runtime-component", runtime_components)
+                + component_args("--error-component", error_components)
                 + f" --seed {int(generator_config.get('seed', 50728))}"
                 + f" --partition {str(generator_config.get('partition', 'debug'))}"
             )

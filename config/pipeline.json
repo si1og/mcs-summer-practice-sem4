@@ -4,10 +4,14 @@
     "count": 200,
     "sleep_scale": 0.01,
     "time_scale": 0.01,
-    "runtime_mu": 7.418158,
-    "runtime_sigma": 0.283774,
-    "error_mu": 9.8981,
-    "error_sigma": 0.0371,
+    "runtime_components": [
+      {"mu": 7.406794, "sigma": 0.012051, "weight": 0.808736},
+      {"mu": 7.562539, "sigma": 0.00981, "weight": 0.191264}
+    ],
+    "error_components": [
+      {"mu": 9.887107, "sigma": 0.001382, "weight": 0.191928},
+      {"mu": 9.901119, "sigma": 0.00141, "weight": 0.808072}
+    ],
     "seed": 50728,
     "partition": "debug",
     "host": "mgmt",

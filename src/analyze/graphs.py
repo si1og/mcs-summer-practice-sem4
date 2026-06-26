@@ -11,9 +11,14 @@ from pathlib import Path
 
 from src.core.jobs import (
     LognormalFit,
+    LognormalMixture,
     SourceJob,
     elapsed_times,
-    fit_elapsed_lognormal,
+    fit_lognormal,
+    fit_lognormal_mixture,
+    fit_elapsed_lognormal_mixture,
+    fit_forecast_error_lognormal_mixture,
+    forecast_errors,
     summarize_jobs,
 )
 
@@ -33,7 +38,7 @@ def _import_pyplot():
     return plt
 
 
-def _histogram(values: list[int], bins: int) -> tuple[list[float], list[int], float]:
+def _histogram(values: list[int] | list[float], bins: int) -> tuple[list[float], list[int], float]:
     lower = min(values)
     upper = max(values)
     width = (upper - lower) / bins if upper != lower else 1.0
@@ -45,14 +50,134 @@ def _histogram(values: list[int], bins: int) -> tuple[list[float], list[int], fl
     return centers, counts, width
 
 
-def _plot_pdf(ax, fit: LognormalFit, values: list[int], bins: int) -> None:
-    lower = max(1, min(values))
-    upper = max(values)
+def _quantile(values: list[float] | list[int], q: float) -> float:
+    sorted_values = sorted(values)
+    if not sorted_values:
+        raise ValueError("cannot calculate quantile for an empty sequence")
+    index = (len(sorted_values) - 1) * q
+    lower = math.floor(index)
+    upper = math.ceil(index)
+    if lower == upper:
+        return float(sorted_values[lower])
+    return float(
+        sorted_values[lower] * (upper - index)
+        + sorted_values[upper] * (index - lower)
+    )
+
+
+def _main_x_limits(values: list[int] | list[float]) -> tuple[float, float]:
+    lower = max(0.0, _quantile(values, 0.05) * 0.98)
+    upper = _quantile(values, 0.99) * 1.02
+    if upper <= lower:
+        return min(values), max(values)
+    return lower, upper
+
+
+def _plot_pdf(
+    ax,
+    fit: LognormalFit | LognormalMixture,
+    values: list[int] | list[float],
+    bins: int,
+    label: str = "логнормальная аппроксимация",
+    x_limits: tuple[float, float] | None = None,
+) -> None:
+    if x_limits:
+        lower, upper = x_limits
+    else:
+        lower = max(1, min(values))
+        upper = max(values)
+    lower = max(1, lower)
     step = (upper - lower) / 300
     xs = [lower + step * index for index in range(301)]
-    _, _, bin_width = _histogram(values, bins)
+    bin_width = (upper - lower) / bins if upper != lower else 1.0
     ys = [fit.pdf(x) * len(values) * bin_width for x in xs]
-    ax.plot(xs, ys, color="#d62728", linewidth=2.0, label="логнормальная аппроксимация")
+    ax.plot(xs, ys, color="#d62728", linewidth=2.0, label=label)
+
+
+def _normal_pdf(x: float, mu: float, sigma: float) -> float:
+    denominator = sigma * math.sqrt(2.0 * math.pi)
+    exponent = -((x - mu) ** 2) / (2.0 * sigma**2)
+    return math.exp(exponent) / denominator
+
+
+def _plot_normal_pdf(
+    ax,
+    values: list[float],
+    mu: float,
+    sigma: float,
+    bins: int,
+    label: str = "нормальная аппроксимация",
+    x_limits: tuple[float, float] | None = None,
+) -> None:
+    if x_limits:
+        lower, upper = x_limits
+    else:
+        lower = min(values)
+        upper = max(values)
+    step = (upper - lower) / 300 if upper != lower else 1.0
+    xs = [lower + step * index for index in range(301)]
+    bin_width = (upper - lower) / bins if upper != lower else 1.0
+    ys = [_normal_pdf(x, mu, sigma) * len(values) * bin_width for x in xs]
+    ax.plot(xs, ys, color="#d62728", linewidth=2.0, label=label)
+
+
+def _plot_normal_mixture_pdf(
+    ax,
+    mixture: LognormalMixture,
+    values: list[float],
+    bins: int,
+    x_limits: tuple[float, float] | None = None,
+) -> None:
+    if x_limits:
+        lower, upper = x_limits
+    else:
+        lower = min(values)
+        upper = max(values)
+    step = (upper - lower) / 300 if upper != lower else 1.0
+    xs = [lower + step * index for index in range(301)]
+    bin_width = (upper - lower) / bins if upper != lower else 1.0
+
+    total_ys = [0.0 for _ in xs]
+    colors = ["#9467bd", "#2ca02c"]
+    for index, (component, weight) in enumerate(
+        zip(mixture.components, mixture.weights), start=1
+    ):
+        ys = [
+            weight * _normal_pdf(x, component.mu, component.sigma) * len(values) * bin_width
+            for x in xs
+        ]
+        total_ys = [total + value for total, value in zip(total_ys, ys)]
+        ax.plot(
+            xs,
+            ys,
+            color=colors[(index - 1) % len(colors)],
+            linewidth=1.4,
+            linestyle="--",
+            label=f"компонента {index}",
+        )
+
+    ax.plot(
+        xs,
+        total_ys,
+        color="#d62728",
+        linewidth=2.2,
+        label="смесь нормальных распределений",
+    )
+
+
+def _mixture_text(mixture: LognormalMixture) -> str:
+    return "\n".join(
+        f"комп. {index}: mu={component.mu:.4f}, sigma={component.sigma:.4f}, вес={weight:.3f}"
+        for index, (component, weight) in enumerate(
+            zip(mixture.components, mixture.weights), start=1
+        )
+    )
+
+
+def _style_large_plot(fig, ax) -> None:
+    ax.grid(True, alpha=0.18)
+    ax.margins(x=0.01)
+    fig.subplots_adjust(left=0.075, right=0.985, top=0.9, bottom=0.14)
 
 
 def plot_source_summary(jobs: list[SourceJob], output_dir: Path) -> Path:
@@ -98,26 +223,114 @@ def plot_runtime_fit(jobs: list[SourceJob], output_dir: Path, bins: int = 40) ->
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / "runtime_fit.png"
     runtimes = elapsed_times(jobs)
-    fit = fit_elapsed_lognormal(jobs)
+    mixture = fit_elapsed_lognormal_mixture(jobs)
+    x_limits = _main_x_limits(runtimes)
 
-    fig, ax = plt.subplots(figsize=(10, 5))
+    fig, ax = plt.subplots(figsize=(12, 6))
     ax.hist(
         runtimes,
         bins=bins,
+        range=x_limits,
         color="#72b7b2",
         edgecolor="white",
         alpha=0.85,
         label="исходные длительности задач",
     )
-    _plot_pdf(ax, fit, runtimes, bins)
+    _plot_pdf(
+        ax,
+        mixture,
+        runtimes,
+        bins,
+        label="смесь логнормальных распределений",
+        x_limits=x_limits,
+    )
     ax.set_title("Распределение длительности задач")
     ax.set_xlabel("ElapsedRaw, секунд")
     ax.set_ylabel("количество задач")
+    ax.set_xlim(*x_limits)
     ax.legend()
 
-    text = f"mu={fit.mu:.4f}\nsigma={fit.sigma:.4f}"
+    text = _mixture_text(mixture)
     ax.text(0.02, 0.95, text, transform=ax.transAxes, va="top", fontsize=9)
-    fig.tight_layout()
+    _style_large_plot(fig, ax)
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+    return path
+
+
+def plot_forecast_error_fit(
+    jobs: list[SourceJob], output_dir: Path, bins: int = 40
+) -> Path:
+    plt = _import_pyplot()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / "forecast_error_fit.png"
+    errors = forecast_errors(jobs)
+    mixture = fit_forecast_error_lognormal_mixture(jobs)
+    x_limits = _main_x_limits(errors)
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.hist(
+        errors,
+        bins=bins,
+        range=x_limits,
+        color="#72b7b2",
+        edgecolor="white",
+        alpha=0.85,
+        label="исходные ошибки прогноза",
+    )
+    _plot_pdf(
+        ax,
+        mixture,
+        errors,
+        bins,
+        label="смесь логнормальных распределений",
+        x_limits=x_limits,
+    )
+    ax.set_title("Распределение ошибки прогноза времени")
+    ax.set_xlabel("TimelimitRaw * 60 - ElapsedRaw, секунд")
+    ax.set_ylabel("количество задач")
+    ax.set_xlim(*x_limits)
+    ax.legend()
+
+    text = _mixture_text(mixture)
+    ax.text(0.02, 0.95, text, transform=ax.transAxes, va="top", fontsize=9)
+    _style_large_plot(fig, ax)
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+    return path
+
+
+def plot_log_forecast_error_fit(
+    jobs: list[SourceJob], output_dir: Path, bins: int = 40
+) -> Path:
+    plt = _import_pyplot()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / "log_forecast_error_fit.png"
+    errors = forecast_errors(jobs)
+    log_errors = [math.log(value) for value in errors]
+    mixture = fit_forecast_error_lognormal_mixture(jobs)
+    x_limits = _main_x_limits(log_errors)
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.hist(
+        log_errors,
+        bins=bins,
+        range=x_limits,
+        color="#72b7b2",
+        edgecolor="white",
+        alpha=0.85,
+        label="логарифм исходной ошибки",
+    )
+    _plot_normal_mixture_pdf(ax, mixture, log_errors, bins, x_limits=x_limits)
+    ax.set_title("Распределение логарифма ошибки прогноза времени")
+    ax.set_xlabel("ln(TimelimitRaw * 60 - ElapsedRaw)")
+    ax.set_ylabel("количество задач")
+    ax.set_xlim(*x_limits)
+    ax.legend()
+
+    text = _mixture_text(mixture)
+    ax.text(0.02, 0.95, text, transform=ax.transAxes, va="top", fontsize=9)
+    _style_large_plot(fig, ax)
     fig.savefig(path, dpi=160)
     plt.close(fig)
     return path
@@ -135,11 +348,13 @@ def plot_generated_vs_source(
     with manifest_path.open(newline="", encoding="utf-8") as input_file:
         for row in csv.DictReader(input_file):
             generated_runtimes.append(int(row["sampled_elapsed_seconds"]))
+    x_limits = _main_x_limits(source_runtimes + generated_runtimes)
 
-    fig, ax = plt.subplots(figsize=(10, 5))
+    fig, ax = plt.subplots(figsize=(12, 6))
     ax.hist(
         source_runtimes,
         bins=bins,
+        range=x_limits,
         density=True,
         color="#4c78a8",
         alpha=0.45,
@@ -148,6 +363,7 @@ def plot_generated_vs_source(
     ax.hist(
         generated_runtimes,
         bins=bins,
+        range=x_limits,
         density=True,
         color="#f58518",
         alpha=0.65,
@@ -156,8 +372,9 @@ def plot_generated_vs_source(
     ax.set_title("Сравнение исходных и сгенерированных длительностей задач")
     ax.set_xlabel("длительность задачи, секунд")
     ax.set_ylabel("плотность")
+    ax.set_xlim(*x_limits)
     ax.legend()
-    fig.tight_layout()
+    _style_large_plot(fig, ax)
     fig.savefig(path, dpi=160)
     plt.close(fig)
     return path
@@ -240,6 +457,22 @@ def _read_cluster_runtime_rows(results_path: Path) -> list[dict[str, str]]:
     return rows
 
 
+def _parse_slurm_time(value: str) -> int:
+    if "-" in value:
+        days_raw, time_raw = value.split("-", 1)
+        days = int(days_raw)
+    else:
+        days = 0
+        time_raw = value
+    hours_raw, minutes_raw, seconds_raw = time_raw.split(":")
+    return (
+        days * 24 * 60 * 60
+        + int(hours_raw) * 60 * 60
+        + int(minutes_raw) * 60
+        + int(seconds_raw)
+    )
+
+
 def _cluster_runtime_series(
     rows: list[dict[str, str]],
 ) -> tuple[list[int], list[float], list[float], list[float]]:
@@ -248,6 +481,105 @@ def _cluster_runtime_series(
     actual = [float(row["actual_slurm_runtime_seconds"]) for row in rows]
     overhead = [float(row["overhead_vs_sleep_percent"]) for row in rows]
     return indexes, planned, actual, overhead
+
+
+def _cluster_actual_errors(rows: list[dict[str, str]]) -> list[float]:
+    errors: list[float] = []
+    for row in rows:
+        if not row.get("requested_slurm_time") or not row.get(
+            "actual_slurm_runtime_seconds"
+        ):
+            continue
+        error = _parse_slurm_time(row["requested_slurm_time"]) - float(
+            row["actual_slurm_runtime_seconds"]
+        )
+        if error > 0:
+            errors.append(error)
+    return errors
+
+
+def plot_actual_error_fit(results_path: Path, output_dir: Path, bins: int = 30) -> Path | None:
+    plt = _import_pyplot()
+    rows = _read_cluster_runtime_rows(results_path)
+    errors = _cluster_actual_errors(rows)
+    if len(errors) < 2:
+        return None
+
+    mixture = fit_lognormal_mixture(errors, component_count=2)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / "actual_error_fit.png"
+    x_limits = _main_x_limits(errors)
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.hist(
+        errors,
+        bins=bins,
+        range=x_limits,
+        color="#f58518",
+        edgecolor="white",
+        alpha=0.85,
+        label="фактические ошибки прогноза",
+    )
+    _plot_pdf(
+        ax,
+        mixture,
+        errors,
+        bins,
+        label="смесь логнормальных распределений",
+        x_limits=x_limits,
+    )
+    ax.set_title("Фактическое распределение ошибки прогноза времени")
+    ax.set_xlabel("requested_slurm_time - actual_slurm_runtime_seconds, секунд")
+    ax.set_ylabel("количество задач")
+    ax.set_xlim(*x_limits)
+    ax.legend()
+
+    text = _mixture_text(mixture)
+    ax.text(0.02, 0.95, text, transform=ax.transAxes, va="top", fontsize=9)
+    _style_large_plot(fig, ax)
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+    return path
+
+
+def plot_log_actual_error_fit(
+    results_path: Path, output_dir: Path, bins: int = 30
+) -> Path | None:
+    plt = _import_pyplot()
+    rows = _read_cluster_runtime_rows(results_path)
+    errors = _cluster_actual_errors(rows)
+    if len(errors) < 2:
+        return None
+
+    mixture = fit_lognormal_mixture(errors, component_count=2)
+    log_errors = [math.log(value) for value in errors]
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / "log_actual_error_fit.png"
+    x_limits = _main_x_limits(log_errors)
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.hist(
+        log_errors,
+        bins=bins,
+        range=x_limits,
+        color="#f58518",
+        edgecolor="white",
+        alpha=0.85,
+        label="логарифм фактической ошибки",
+    )
+    _plot_normal_mixture_pdf(ax, mixture, log_errors, bins, x_limits=x_limits)
+    ax.set_title("Фактическое распределение логарифма ошибки прогноза времени")
+    ax.set_xlabel("ln(requested_slurm_time - actual_slurm_runtime_seconds)")
+    ax.set_ylabel("количество задач")
+    ax.set_xlim(*x_limits)
+    ax.legend()
+
+    text = _mixture_text(mixture)
+    ax.text(0.02, 0.95, text, transform=ax.transAxes, va="top", fontsize=9)
+    _style_large_plot(fig, ax)
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+    return path
 
 
 def plot_cluster_runtime_spread(results_path: Path, output_dir: Path) -> Path | None:
@@ -455,6 +787,8 @@ def build_graphs(
     paths = [
         plot_source_summary(jobs, output_dir),
         plot_runtime_fit(jobs, output_dir),
+        plot_forecast_error_fit(jobs, output_dir),
+        plot_log_forecast_error_fit(jobs, output_dir),
     ]
     if manifest_path and manifest_path.exists():
         paths.append(plot_generated_vs_source(jobs, manifest_path, output_dir))
@@ -474,4 +808,10 @@ def build_graphs(
         overhead_by_job = plot_cluster_overhead_by_job(cluster_results_path, output_dir)
         if overhead_by_job:
             paths.append(overhead_by_job)
+        actual_error = plot_actual_error_fit(cluster_results_path, output_dir)
+        if actual_error:
+            paths.append(actual_error)
+        log_actual_error = plot_log_actual_error_fit(cluster_results_path, output_dir)
+        if log_actual_error:
+            paths.append(log_actual_error)
     return paths
