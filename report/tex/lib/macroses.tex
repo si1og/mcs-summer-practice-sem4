@@ -1,0 +1,70 @@
+\NewDocumentCommand{\screenshot}{O{} O{0.9} m m}{
+    \begin{figure}[H]
+        \centering
+        \includegraphics[width=#2\textwidth]{#3}
+        \caption{#4}
+        \def\screenshotLabel{#1}
+        \ifx\screenshotLabel\empty
+            \label{fig:#3}
+        \else
+            \label{#1}
+        \fi
+    \end{figure}
+}
+
+% Source - https://tex.stackexchange.com/a/89932
+% Posted by Huugo, modified by community. See post 'Timeline' for change history
+% Retrieved 2026-03-08, License - CC BY-SA 3.0
+
+\newcolumntype{Y}{>{\centering\arraybackslash}X}
+
+\newcommand{\fullPageFigure}[3][]{
+    \clearpage
+    \begingroup
+        \pdfpagewidth=420mm
+        \pdfpageheight=297mm
+        \paperwidth=\pdfpagewidth
+        \paperheight=\pdfpageheight
+        \textwidth=\dimexpr\paperwidth-30mm\relax
+        \textheight=\dimexpr\paperheight-30mm\relax
+        \hsize=\textwidth
+        \linewidth=\textwidth
+        \columnwidth=\textwidth
+        \oddsidemargin=\dimexpr15mm-1in\relax
+        \evensidemargin=\oddsidemargin
+        \topmargin=\dimexpr15mm-1in\relax
+        \headheight=0pt
+        \headsep=0pt
+        \footskip=0pt
+        \thispagestyle{empty}
+        \null
+        \refstepcounter{figure}
+        \def\aThreeFigureLabel{#1}
+        \ifx\aThreeFigureLabel\empty
+            \label{fig:#2}
+        \else
+            \label{#1}
+        \fi
+        \begin{tikzpicture}[remember picture, overlay]
+            \node[anchor=north] at ([yshift=-15mm]current page.north) {
+                \includegraphics[
+                    width=390mm,
+                    height=235mm,
+                    keepaspectratio
+                ]{tex/graphics/#2}
+            };
+            \node[
+                anchor=south,
+                align=center,
+                font=\normalsize
+            ] at ([yshift=10mm]current page.south) {
+                Рис.~\thefigure: #3\\[0.45cm]
+                \thepage
+            };
+        \end{tikzpicture}
+        \clearpage
+    \endgroup
+    \restoregeometry
+    \pdfpagewidth=\paperwidth
+    \pdfpageheight=\paperheight
+}

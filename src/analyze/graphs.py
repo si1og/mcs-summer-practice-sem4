@@ -65,9 +65,16 @@ def _quantile(values: list[float] | list[int], q: float) -> float:
     )
 
 
-def _main_x_limits(values: list[int] | list[float]) -> tuple[float, float]:
-    lower = max(0.0, _quantile(values, 0.05) * 0.98)
-    upper = _quantile(values, 0.99) * 1.02
+def _main_x_limits(
+    values: list[int] | list[float],
+    lower_quantile: float = 0.05,
+    upper_quantile: float = 0.99,
+) -> tuple[float, float]:
+    lower_value = _quantile(values, lower_quantile)
+    upper_value = _quantile(values, upper_quantile)
+    padding = (upper_value - lower_value) * 0.04
+    lower = max(0.0, lower_value - padding)
+    upper = upper_value + padding
     if upper <= lower:
         return min(values), max(values)
     return lower, upper
@@ -266,7 +273,7 @@ def plot_forecast_error_fit(
     path = output_dir / "forecast_error_fit.png"
     errors = forecast_errors(jobs)
     mixture = fit_forecast_error_lognormal_mixture(jobs)
-    x_limits = _main_x_limits(errors)
+    x_limits = _main_x_limits(errors, upper_quantile=0.98)
 
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.hist(
@@ -309,7 +316,7 @@ def plot_log_forecast_error_fit(
     errors = forecast_errors(jobs)
     log_errors = [math.log(value) for value in errors]
     mixture = fit_forecast_error_lognormal_mixture(jobs)
-    x_limits = _main_x_limits(log_errors)
+    x_limits = _main_x_limits(log_errors, upper_quantile=0.98)
 
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.hist(

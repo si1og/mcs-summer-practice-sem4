@@ -1,0 +1,270 @@
+\documentclass[a3paper, landscape]{article}
+\usepackage[left=0cm, right=0cm, top=0cm, bottom=0cm]{geometry}
+\usepackage[T2A]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[russian]{babel}
+\thispagestyle{empty}
+
+\usepackage{tabularray}
+\usepackage{tikz}
+\usetikzlibrary{positioning, calc, tikzmark}
+
+\newcommand{\tm}[2]{\tikzmarknode{#1}{#2}}
+
+\tikzset{
+    lnk/.style={thick},
+    crd/.style={font=\scriptsize, fill=white, inner sep=1pt},
+    ann/.style={font=\scriptsize},
+}
+
+\newcommand{\dbtable}[3]{%
+    \node[inner sep=0pt, anchor=north] (#1) at (#2) {%
+        \begin{tblr}{
+            colspec = {Q[c,1.5em]Q[l,12em]},
+            hline{1-3} = {solid},
+            hline{Z} = {solid},
+            vlines,
+            rows = {font=\ttfamily\footnotesize, abovesep=2pt, belowsep=2pt},
+            row{1} = {font=\bfseries\small, halign=c},
+            column{1} = {font=\it\footnotesize, halign=c},
+        }
+            #3
+        \end{tblr}%
+    };%
+}
+
+\newcommand{\dbdict}[3]{%
+    \node[inner sep=0pt, anchor=north] (#1) at (#2) {%
+        \begin{tblr}{
+            colspec = {Q[c,1.5em]Q[l,7em]},
+            hline{1-3} = {solid},
+            hline{Z} = {solid},
+            vlines,
+            rows = {font=\ttfamily\footnotesize, abovesep=2pt, belowsep=2pt},
+            row{1} = {font=\bfseries\scriptsize, halign=c},
+            column{1} = {font=\it\footnotesize, halign=c},
+        }
+            #3
+        \end{tblr}%
+    };%
+}
+
+\begin{document}
+\begin{figure}[p]
+\centering
+\scalebox{1.15}{
+\begin{tikzpicture}[remember picture]
+
+% === Shifts ===
+\def\hgap{1.5em}
+\def\xWestShift{-3.4em}
+\def\xEastShift{12.6em}
+\def\dxWestShift{-3.4em}
+\def\dxEastShift{7.7em}
+\def\oneRowTablesLinkMargin{7.9em}
+\def\tableHgap{27em}
+
+% ==================== MAIN TABLES ====================
+
+% === Row 1 ===
+
+\dbtable{ff}{\tableHgap,10em}{
+    \SetCell[c=2]{c} Font\_family & \\
+    PK & \tm{ff_pk}{id\_Font\_family} \\
+       & Name \\
+       & Year\_created \\
+       & Description \\
+       & Typeface\_count \\
+    FK & \tm{ff_fk_cat}{id\_Category} \\
+}
+
+\dbtable{cat}{\tableHgap * 2,10em}{
+    \SetCell[c=2]{c} Category & \\
+    PK & \tm{cat_pk}{id\_Category} \\
+       & Name \\
+       & Description \\
+       & Icon \\
+       & Font\_family\_count \\
+}
+
+% === Row 2 ===
+
+\dbtable{tf}{\tableHgap,-18em}{
+    \SetCell[c=2]{c} Typeface & \\
+    PK & \tm{tf_pk}{id\_Typeface} \\
+       & Name \\
+    FK & \tm{tf_fk_w}{id\_Weight} \\
+    FK & \tm{tf_fk_sl}{id\_Slope} \\
+       & File\_size \\
+    FK & \tm{tf_fk_ff}{id\_Font\_family} \\
+    FK & \tm{tf_fk_fmt}{id\_Format} \\
+}
+
+\dbtable{fmt}{\tableHgap * 2,-18em}{
+    \SetCell[c=2]{c} Format & \\
+    PK & \tm{fmt_pk}{id\_Format} \\
+       & Name \\
+    FK & \tm{fmt_fk_ext}{id\_Extension} \\
+       & Year\_released \\
+       & Description \\
+       & Web\_support \\
+}
+
+% === Row 3 ===
+
+\dbtable{lang}{1.2em,-18em}{
+    \SetCell[c=2]{c} Language & \\
+    PK & \tm{lang_pk}{id\_Language} \\
+       & Name \\
+       & ISO\_code \\
+    FK & \tm{lang_fk_wd}{id\_Writing\_direction} \\
+    FK & \tm{lang_fk_st}{id\_Script\_type} \\
+}
+
+\dbtable{alph}{2em,10em}{
+    \SetCell[c=2]{c} Symbol & \\
+    PK & \tm{alph_pk}{id\_Symbol} \\
+       & Value \\
+       & Unicode\_code \\
+    FK & \tm{alph_fk_tf}{id\_Typeface} \\
+    FK & \tm{alph_fk_lang}{id\_Language} \\
+}
+
+% ==================== DICTIONARIES ====================
+
+\dbdict{d_wd}{-18em,-12em}{
+    \SetCell[c=2]{c} Writing\_direction & \\
+    PK & \tm{d_wd_pk}{id\_Writing\_dir.} \\
+       & Name \\
+}
+
+\dbdict{d_st}{-18em,-20em}{
+    \SetCell[c=2]{c} Script\_type & \\
+    PK & \tm{d_st_pk}{id\_Script\_type} \\
+       & Name \\
+}
+
+\dbdict{d_weight}{27em,-7em}{
+    \SetCell[c=2]{c} Weight & \\
+    PK & \tm{d_weight_pk}{id\_Weight} \\
+       & Name \\
+}
+
+\dbdict{d_slope}{48em,-7em}{
+    \SetCell[c=2]{c} Slope & \\
+    PK & \tm{d_slope_pk}{id\_Slope} \\
+       & Name \\
+}
+
+\dbdict{d_ext}{72em,-21.24em}{
+    \SetCell[c=2]{c} Extension & \\
+    PK & \tm{d_ext_pk}{id\_Extension} \\
+       & Name \\
+}
+
+% ==================== СВЯЗИ ОСНОВНЫХ ТАБЛИЦ ====================
+
+% Font_family.id_Category -> Category.id_Category
+\draw[lnk] ([xshift=\xEastShift]ff_fk_cat.west)
+    -- ++(\hgap,0) node[crd, below] {$\infty$}
+    node[ann, below, yshift=-0.5em] {15--20}
+    |- ++(\oneRowTablesLinkMargin,0)
+    |- ([xshift={-\hgap + \xWestShift}]cat_pk.west)
+    -- node[crd, above] {1} ([xshift=\xWestShift]cat_pk.west);
+
+% Font_family.id_Font_family -> Typeface.id_Font_family
+\draw[lnk] ([xshift=\xWestShift]ff_pk.west)
+    -- ++(-2.2em,0) node[crd, above] {1}
+    |- ++(-42em,6em)
+    |- ([xshift={-\hgap + \xWestShift}]tf_fk_ff.west)
+    -- node[crd, below, xshift=-1em] {$\infty$}
+    node[ann, below, xshift=-1em, yshift=-0.5em] {18--22}
+    ([xshift=\xWestShift]tf_fk_ff.west);
+
+% Typeface.id_Format -> Format.id_Format
+\draw[lnk] ([xshift=\xEastShift]tf_fk_fmt.west)
+    -- ++(2.4em,0) node[crd, above] {$\infty$}
+    |- ++(4.1em,0)
+    |- ([xshift={-\hgap + \xWestShift}]fmt_pk.west)
+    -- node[crd, above] {1} ([xshift=\xWestShift]fmt_pk.west);
+
+% Symbol.id_Typeface -> Typeface.id_Typeface
+\draw[lnk] ([xshift=\xEastShift]alph_fk_tf.west)
+    -- ++(\hgap,0)
+    -- ++(0, -3.35em)
+    node[crd, above] {$\infty$}
+    node[ann, below, fill=white] {2--5 languages per typeface}
+    |- ([xshift={-\hgap + \xWestShift}]tf_pk.west)
+    -- node[crd, above] {1} ([xshift=\xWestShift]tf_pk.west);
+
+% Symbol.id_Language -> Language.id_Language
+\draw[lnk] ([xshift=\xWestShift]alph_fk_lang.west)
+    -- ++(-\hgap,0)
+    -- ++(0, -2em)
+    node[crd, above] {$\infty$}
+    node[ann, below, fill=white] {33--45 symbols per pair}
+    |- ([xshift=\xWestShift]lang_pk.west)
+    -- node[crd, above] {1} ([xshift=\xWestShift]lang_pk.west);
+
+% ==================== DICTIONARY RELATIONSHIPS ====================
+
+% Typeface.id_Weight -> Weight.id_Weight
+\draw[lnk] ([xshift=\xEastShift]tf_fk_w.west)
+    -- ++(2.5em,0) node[crd, below] {$\infty$}
+    |- ([xshift=\dxEastShift]d_weight_pk.west)
+    -- node[crd, above] {1} ([xshift=\dxEastShift]d_weight_pk.west);
+
+% Typeface.id_Slope -> Slope.id_Slope
+\draw[lnk] ([xshift=\xEastShift]tf_fk_sl.west)
+    -- ++(\hgap*3,0) node[crd, below] {$\infty$}
+    |- ([xshift={-\hgap + \dxWestShift}]d_slope_pk.west)
+    -- node[crd, above] {1} ([xshift=\dxWestShift]d_slope_pk.west);
+
+% Format.id_Extension -> Extension.id_Extension
+\draw[lnk] ([xshift=\xEastShift]fmt_fk_ext.west)
+    -- ++(\hgap,0) node[crd, above] {$\infty$}
+    |- ([xshift={-\hgap + \dxWestShift}]d_ext_pk.west)
+    -- node[crd, above] {1} ([xshift=\dxWestShift]d_ext_pk.west);
+
+% Language.id_Writing_direction -> Writing_direction.id_Writing_direction
+\draw[lnk] ([xshift=\xWestShift]lang_fk_wd.west)
+    -- ++(-\hgap,0) node[crd, above] {$\infty$}
+    |- ([xshift={\hgap + \dxEastShift}]d_wd_pk.west)
+    -- node[crd, above] {1} ([xshift=\dxEastShift]d_wd_pk.west);
+
+% Language.id_Script_type -> Script_type.id_Script_type
+\draw[lnk] ([xshift=\xWestShift]lang_fk_st.west)
+    -- ++(-\hgap,0) node[crd, above] {$\infty$}
+    -- ++(-2em, 0)
+    |- ([xshift={\hgap + \dxEastShift}]d_st_pk.west)
+    -- node[crd, above] {1} ([xshift=\dxEastShift]d_st_pk.west);
+
+
+% ==================== LEVELS, COEFFICIENT RANGE, RECORD COUNT ====================
+
+% Annotation format:
+% level; coefficient range; record count
+
+% Base table
+\node[ann, above=0.3em of cat] {1; --; 12};
+
+% Dictionaries
+\node[ann, above=0.3em of d_wd] {1; --; 2};
+\node[ann, above=0.3em of d_st] {1; --; 3};
+\node[ann, above=0.3em of d_weight] {1; --; 9};
+\node[ann, above=0.3em of d_slope] {1; --; 3};
+\node[ann, above=0.3em of d_ext] {1; --; 5};
+
+% Tables depending on dictionaries
+\node[ann, above=0.3em of fmt] {2; --; 5};
+\node[ann, above=0.3em of lang] {2; --; 40};
+
+% Derived tables
+\node[ann, above=0.3em of ff] {2; 15--20; 210};
+\node[ann, above=0.3em of tf] {3; 18--22; 4217};
+\node[ann, above=0.3em of alph] {4; 2--5 and 33--45; 581014};
+
+\end{tikzpicture}
+}
+\end{figure}
+\end{document}
