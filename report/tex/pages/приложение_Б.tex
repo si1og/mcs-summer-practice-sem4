@@ -7,25 +7,4 @@
     \scriptsize\ttfamily\textcolor{gray}{\arabic{FancyVerbLine}}%
 }
 
-\begin{minted}[linenos, numbersep=10pt, firstnumber=1, fontsize=\scriptsize]{bash}
-#!/bin/bash
-#SBATCH --job-name=job_0001_50728
-#SBATCH --partition=debug
-#SBATCH --nodes=2
-#SBATCH --ntasks=2
-#SBATCH --time=00:17:00
-#SBATCH --output=logs/job_0001_%j.out
-
-set -euo pipefail
-
-started_at=$(date +%s)
-echo "job_id=${SLURM_JOB_ID}"
-echo "started_at=${started_at}"
-echo "nodes=${SLURM_JOB_NUM_NODES}"
-
-sleep 74
-
-finished_at=$(date +%s)
-echo "finished_at=${finished_at}"
-echo "elapsed=$((finished_at - started_at))"
-\end{minted}
+\inputminted[linenos, numbersep=10pt, firstnumber=1, fontsize=\scriptsize]{bash}{code/example_job_0001.slurm}
