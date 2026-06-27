@@ -1,0 +1,26 @@
+[
+  {
+    "label": "Analyze: build graphs",
+    "adapter": "Debugpy",
+    "request": "launch",
+    "module": "src.analyze.main",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "args": [],
+  },
+  {
+    "label": "Pipeline: analyze only",
+    "adapter": "Debugpy",
+    "request": "launch",
+    "module": "src.pipeline.main",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "args": ["--analyze-only"],
+  },
+  {
+    "label": "Pipeline: analyze only, no graphs",
+    "adapter": "Debugpy",
+    "request": "launch",
+    "module": "src.pipeline.main",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "args": ["--analyze-only", "--no-graphs"],
+  },
+]

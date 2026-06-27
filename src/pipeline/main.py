@@ -14,7 +14,6 @@ from src.pipeline.cluster import (
     submit_remote_run,
 )
 
-
 DEFAULT_CONFIG = Path("config/pipeline.json")
 
 
@@ -83,10 +82,9 @@ def main() -> None:
     analyze_config = config.get("analyze", {})
 
     count = (
-        args.count
-        if args.count is not None
-        else int(generator_config.get("count", 20))
+        args.count if args.count is not None else int(generator_config.get("count", 20))
     )
+    max_group_size = int(analyze_config.get("max_group_size", 50))
     graphs_dir = Path(analyze_config.get("graphs_dir", "generated/graphs"))
     results_root = Path(cluster_config.get("results_root", "generated/cluster_runs"))
 
@@ -113,7 +111,9 @@ def main() -> None:
             )
         else:
             generator_host = str(generator_config.get("host", host))
-            generator_dir = str(generator_config.get("generator_dir", "~/slurm-generator"))
+            generator_dir = str(
+                generator_config.get("generator_dir", "~/slurm-generator")
+            )
             runtime_components = generator_config.get(
                 "runtime_components",
                 [{"mean": 1701.49, "sigma": 435.21, "weight": 1.0}],
@@ -127,7 +127,9 @@ def main() -> None:
                 + f" --count {count}"
                 + f" --sleep-scale {float(generator_config.get('sleep_scale', 0.01))}"
                 + f" --time-scale {float(generator_config.get('time_scale', 0.01))}"
-                + normal_component_args("--runtime-normal-component", runtime_components)
+                + normal_component_args(
+                    "--runtime-normal-component", runtime_components
+                )
                 + component_args("--error-component", error_components)
                 + f" --seed {int(generator_config.get('seed', 50728))}"
                 + f" --partition {str(generator_config.get('partition', 'debug'))}"
@@ -173,6 +175,7 @@ def main() -> None:
         manifest_path=manifest_path,
         log_path=None,
         cluster_results_path=cluster_results_path,
+        max_group_size=max_group_size,
     )
     for path in graph_paths:
         print(f"graph={path}")

@@ -15,10 +15,10 @@ from src.core.jobs import (
     NormalMixture,
     SourceJob,
     elapsed_times,
-    fit_lognormal,
-    fit_lognormal_mixture,
     fit_elapsed_normal_mixture,
     fit_forecast_error_lognormal_mixture,
+    fit_lognormal,
+    fit_lognormal_mixture,
     forecast_errors,
     summarize_jobs,
 )
@@ -39,7 +39,9 @@ def _import_pyplot():
     return plt
 
 
-def _histogram(values: list[int] | list[float], bins: int) -> tuple[list[float], list[int], float]:
+def _histogram(
+    values: list[int] | list[float], bins: int
+) -> tuple[list[float], list[int], float]:
     lower = min(values)
     upper = max(values)
     width = (upper - lower) / bins if upper != lower else 1.0
@@ -61,24 +63,45 @@ def _quantile(values: list[float] | list[int], q: float) -> float:
     if lower == upper:
         return float(sorted_values[lower])
     return float(
-        sorted_values[lower] * (upper - index)
-        + sorted_values[upper] * (index - lower)
+        sorted_values[lower] * (upper - index) + sorted_values[upper] * (index - lower)
     )
 
 
 def _main_x_limits(
     values: list[int] | list[float],
-    lower_quantile: float = 0.05,
-    upper_quantile: float = 0.99,
+    lower_quantile: float = 0.02,
+    upper_quantile: float = 0.995,
 ) -> tuple[float, float]:
     lower_value = _quantile(values, lower_quantile)
     upper_value = _quantile(values, upper_quantile)
-    padding = (upper_value - lower_value) * 0.04
+    padding = (upper_value - lower_value) * 0.15
     lower = max(0.0, lower_value - padding)
     upper = upper_value + padding
     if upper <= lower:
         return min(values), max(values)
     return lower, upper
+
+
+def _padded_x_limits(
+    x_limits: tuple[float, float], padding_ratio: float = 0.035
+) -> tuple[float, float]:
+    lower, upper = x_limits
+    padding = (upper - lower) * padding_ratio
+    return lower - padding, upper + padding
+
+
+def _compact_hist_bins(
+    values: list[int] | list[float],
+    max_bins: int,
+    target_bin_width: float = 1.2,
+    min_bins: int = 24,
+) -> int:
+    lower = min(values)
+    upper = max(values)
+    if upper <= lower:
+        return 1
+    compact_bins = math.ceil((upper - lower) / target_bin_width)
+    return min(max_bins, max(min_bins, compact_bins))
 
 
 def _plot_pdf(
@@ -171,7 +194,10 @@ def _plot_normal_mixture_pdf(
         zip(mixture.components, mixture.weights), start=1
     ):
         ys = [
-            weight * _normal_pdf(x, component.mu, component.sigma) * len(values) * bin_width
+            weight
+            * _normal_pdf(x, component.mu, component.sigma)
+            * len(values)
+            * bin_width
             for x in xs
         ]
         total_ys = [total + value for total, value in zip(total_ys, ys)]
@@ -284,7 +310,7 @@ def plot_runtime_fit(jobs: list[SourceJob], output_dir: Path, bins: int = 40) ->
     ax.set_title("Распределение длительности задач")
     ax.set_xlabel("ElapsedRaw, секунд")
     ax.set_ylabel("количество задач")
-    ax.set_xlim(*x_limits)
+    ax.set_xlim(*_padded_x_limits(x_limits))
     ax.legend()
 
     text = _normal_mixture_text(mixture)
@@ -295,38 +321,82 @@ def plot_runtime_fit(jobs: list[SourceJob], output_dir: Path, bins: int = 40) ->
     return path
 
 
+def _manifest_scaled_forecast_errors(manifest_path: Path | None) -> list[float]:
+    if not manifest_path or not manifest_path.exists():
+        return []
+    errors: list[float] = []
+    with manifest_path.open(newline="", encoding="utf-8") as input_file:
+        for row in csv.DictReader(input_file):
+            if row.get("scaled_forecast_seconds"):
+                forecast = float(row["scaled_forecast_seconds"])
+            else:
+                sampled_elapsed = float(row["sampled_elapsed_seconds"])
+                if sampled_elapsed <= 0:
+                    continue
+                scale = float(row["scaled_sleep_seconds"]) / sampled_elapsed
+                forecast = float(row["generated_forecast_seconds"]) * scale
+            error = forecast - float(row["scaled_sleep_seconds"])
+            if error > 0:
+                errors.append(error)
+    return errors
+
+
 def plot_forecast_error_fit(
-    jobs: list[SourceJob], output_dir: Path, bins: int = 40
+    jobs: list[SourceJob],
+    output_dir: Path,
+    manifest_path: Path | None = None,
+    cluster_results_path: Path | None = None,
+    bins: int = 40,
 ) -> Path:
     plt = _import_pyplot()
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / "forecast_error_fit.png"
-    errors = forecast_errors(jobs)
-    mixture = fit_forecast_error_lognormal_mixture(jobs)
-    x_limits = _main_x_limits(errors, upper_quantile=0.98)
+    errors = _manifest_scaled_forecast_errors(manifest_path) or forecast_errors(jobs)
+    actual_errors: list[float] = []
+    if cluster_results_path:
+        actual_errors = _cluster_actual_errors_from_manifest(
+            _read_cluster_runtime_rows(cluster_results_path), manifest_path
+        )
+
+    mixture = fit_lognormal_mixture(errors, component_count=2)
+    x_values = errors + actual_errors if actual_errors else errors
+    x_limits = _main_x_limits(x_values, upper_quantile=0.98)
+    histogram_bins = _compact_hist_bins(
+        x_values, bins, target_bin_width=1.2, min_bins=20
+    )
 
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.hist(
         errors,
-        bins=bins,
+        bins=histogram_bins,
         range=x_limits,
         color="#72b7b2",
         edgecolor="white",
-        alpha=0.85,
-        label="исходные ошибки прогноза",
+        alpha=0.55,
+        label="расчетные ошибки прогноза",
     )
+    if actual_errors:
+        ax.hist(
+            actual_errors,
+            bins=histogram_bins,
+            range=x_limits,
+            color="#f58518",
+            edgecolor="white",
+            alpha=0.55,
+            label="фактические ошибки прогноза",
+        )
     _plot_pdf(
         ax,
         mixture,
         errors,
-        bins,
+        histogram_bins,
         label="смесь логнормальных распределений",
         x_limits=x_limits,
     )
     ax.set_title("Распределение ошибки прогноза времени")
-    ax.set_xlabel("TimelimitRaw * 60 - ElapsedRaw, секунд")
+    ax.set_xlabel("прогноз - время выполнения, секунд")
     ax.set_ylabel("количество задач")
-    ax.set_xlim(*x_limits)
+    ax.set_xlim(*_padded_x_limits(x_limits))
     ax.legend()
 
     text = _mixture_text(mixture)
@@ -362,7 +432,7 @@ def plot_log_forecast_error_fit(
     ax.set_title("Распределение логарифма ошибки прогноза времени")
     ax.set_xlabel("ln(TimelimitRaw * 60 - ElapsedRaw)")
     ax.set_ylabel("количество задач")
-    ax.set_xlim(*x_limits)
+    ax.set_xlim(*_padded_x_limits(x_limits))
     ax.legend()
 
     text = _mixture_text(mixture)
@@ -409,7 +479,7 @@ def plot_generated_vs_source(
     ax.set_title("Сравнение исходных и сгенерированных длительностей задач")
     ax.set_xlabel("длительность задачи, секунд")
     ax.set_ylabel("плотность")
-    ax.set_xlim(*x_limits)
+    ax.set_xlim(*_padded_x_limits(x_limits))
     ax.legend()
     _style_large_plot(fig, ax)
     fig.savefig(path, dpi=160)
@@ -451,7 +521,7 @@ def plot_execution_overhead(
 
     indexes: list[int] = []
     overhead_percent: list[float] = []
-    for index, times in log_times.items():
+    for index, times in sorted(log_times.items(), key=lambda item: int(item[0])):
         if "start" not in times or "end" not in times or index not in planned:
             continue
         actual_seconds = (times["end"] - times["start"]).total_seconds()
@@ -513,10 +583,11 @@ def _parse_slurm_time(value: str) -> int:
 def _cluster_runtime_series(
     rows: list[dict[str, str]],
 ) -> tuple[list[int], list[float], list[float], list[float]]:
-    indexes = [int(row["script"].split("_")[1]) for row in rows]
-    planned = [float(row["planned_sleep_seconds"]) for row in rows]
-    actual = [float(row["actual_slurm_runtime_seconds"]) for row in rows]
-    overhead = [float(row["overhead_vs_sleep_percent"]) for row in rows]
+    sorted_rows = sorted(rows, key=lambda row: int(row["script"].split("_")[1]))
+    indexes = [int(row["script"].split("_")[1]) for row in sorted_rows]
+    planned = [float(row["planned_sleep_seconds"]) for row in sorted_rows]
+    actual = [float(row["actual_slurm_runtime_seconds"]) for row in sorted_rows]
+    overhead = [float(row["overhead_vs_sleep_percent"]) for row in sorted_rows]
     return indexes, planned, actual, overhead
 
 
@@ -583,11 +654,12 @@ def plot_actual_error_fit(
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / "actual_error_fit.png"
     x_limits = _main_x_limits(errors)
+    histogram_bins = _compact_hist_bins(errors, bins)
 
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.hist(
         errors,
-        bins=bins,
+        bins=histogram_bins,
         range=x_limits,
         color="#f58518",
         edgecolor="white",
@@ -598,14 +670,14 @@ def plot_actual_error_fit(
         ax,
         mixture,
         errors,
-        bins,
+        histogram_bins,
         label="смесь логнормальных распределений",
         x_limits=x_limits,
     )
     ax.set_title("Фактическое распределение ошибки прогноза времени")
     ax.set_xlabel("расчетный прогноз из manifest - фактическое время, секунд")
     ax.set_ylabel("количество задач")
-    ax.set_xlim(*x_limits)
+    ax.set_xlim(*_padded_x_limits(x_limits))
     ax.legend()
 
     text = _mixture_text(mixture)
@@ -613,7 +685,7 @@ def plot_actual_error_fit(
     _style_large_plot(fig, ax)
     fig.savefig(path, dpi=160)
     plt.close(fig)
-    return path
+    # return path
 
 
 def plot_log_actual_error_fit(
@@ -633,22 +705,23 @@ def plot_log_actual_error_fit(
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / "log_actual_error_fit.png"
     x_limits = _main_x_limits(log_errors)
+    histogram_bins = _compact_hist_bins(errors, bins)
 
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.hist(
         log_errors,
-        bins=bins,
+        bins=histogram_bins,
         range=x_limits,
         color="#f58518",
         edgecolor="white",
         alpha=0.85,
         label="логарифм фактической ошибки",
     )
-    _plot_normal_mixture_pdf(ax, mixture, log_errors, bins, x_limits=x_limits)
+    _plot_normal_mixture_pdf(ax, mixture, log_errors, histogram_bins, x_limits=x_limits)
     ax.set_title("Фактическое распределение логарифма ошибки прогноза времени")
     ax.set_xlabel("ln(расчетный прогноз из manifest - фактическое время)")
     ax.set_ylabel("количество задач")
-    ax.set_xlim(*x_limits)
+    ax.set_xlim(*_padded_x_limits(x_limits))
     ax.legend()
 
     text = _mixture_text(mixture)
@@ -659,7 +732,9 @@ def plot_log_actual_error_fit(
     return path
 
 
-def plot_cluster_runtime_spread(results_path: Path, output_dir: Path) -> Path | None:
+def plot_cluster_runtime_spread(
+    results_path: Path, output_dir: Path, max_group_size: int
+) -> Path | None:
     plt = _import_pyplot()
     rows = _read_cluster_runtime_rows(results_path)
 
@@ -694,19 +769,23 @@ def plot_cluster_runtime_spread(results_path: Path, output_dir: Path) -> Path | 
 
     flat_axes[1].hist(
         overhead,
-        bins=min(30, max(5, len(overhead) // 8)),
+        bins=min(14, max(5, len(set(overhead)))),
         color="#f58518",
         edgecolor="white",
     )
-    flat_axes[1].axvline(
-        3.0, color="#d62728", linestyle="--", linewidth=1.5, label="порог 3%"
-    )
+    overhead_xlim = _padded_x_limits((min(overhead), max(overhead)), padding_ratio=0.08)
+    flat_axes[1].set_xlim(*overhead_xlim)
+    if overhead_xlim[0] <= 3.0 <= overhead_xlim[1]:
+        flat_axes[1].axvline(
+            3.0, color="#d62728", linestyle="--", linewidth=1.5, label="порог 3%"
+        )
     flat_axes[1].set_title("Распределение отклонения")
     flat_axes[1].set_xlabel("(факт - sleep) / sleep, %")
     flat_axes[1].set_ylabel("количество задач")
-    flat_axes[1].legend()
+    if flat_axes[1].get_legend_handles_labels()[0]:
+        flat_axes[1].legend()
 
-    group_size = max(1, math.ceil(len(indexes) / 20))
+    group_size = max(1, math.ceil(len(indexes) / max_group_size))
     grouped_indexes: list[float] = []
     grouped_planned: list[float] = []
     grouped_actual: list[float] = []
@@ -760,7 +839,9 @@ def plot_cluster_runtime_spread(results_path: Path, output_dir: Path) -> Path | 
 
 
 def plot_cluster_planned_actual_by_job(
-    results_path: Path, output_dir: Path
+    results_path: Path,
+    output_dir: Path,
+    max_group_size: int,
 ) -> Path | None:
     plt = _import_pyplot()
     rows = _read_cluster_runtime_rows(results_path)
@@ -775,7 +856,7 @@ def plot_cluster_planned_actual_by_job(
     ax.scatter(indexes, planned, s=18, alpha=0.55, color="#4c78a8")
     ax.scatter(indexes, actual, s=18, alpha=0.55, color="#f58518")
 
-    group_size = max(1, math.ceil(len(indexes) / 20))
+    group_size = max(1, math.ceil(len(indexes) / max_group_size))
     grouped_indexes: list[float] = []
     grouped_planned: list[float] = []
     grouped_actual: list[float] = []
@@ -811,7 +892,9 @@ def plot_cluster_planned_actual_by_job(
     return path
 
 
-def plot_cluster_overhead_by_job(results_path: Path, output_dir: Path) -> Path | None:
+def plot_cluster_overhead_by_job(
+    results_path: Path, output_dir: Path, max_group_size: int
+) -> Path | None:
     plt = _import_pyplot()
     rows = _read_cluster_runtime_rows(results_path)
     if not rows:
@@ -824,7 +907,7 @@ def plot_cluster_overhead_by_job(results_path: Path, output_dir: Path) -> Path |
     fig, ax = plt.subplots(figsize=(12, 5))
     ax.scatter(indexes, overhead, s=18, alpha=0.55, color="#54a24b")
 
-    group_size = max(1, math.ceil(len(indexes) / 20))
+    group_size = max(1, math.ceil(len(indexes) / max_group_size))
     grouped_indexes: list[float] = []
     grouped_overhead: list[float] = []
     for start in range(0, len(indexes), group_size):
@@ -840,9 +923,7 @@ def plot_cluster_overhead_by_job(results_path: Path, output_dir: Path) -> Path |
         marker="o",
         label="медиана по группам",
     )
-    ax.axhline(
-        3.0, color="#d62728", linestyle="--", linewidth=1.5, label="порог 3%"
-    )
+    ax.axhline(3.0, color="#d62728", linestyle="--", linewidth=1.5, label="порог 3%")
     ax.set_title("Отклонение фактического времени по задачам")
     ax.set_xlabel("номер задачи")
     ax.set_ylabel("(факт - sleep) / sleep, %")
@@ -855,6 +936,7 @@ def plot_cluster_overhead_by_job(results_path: Path, output_dir: Path) -> Path |
 
 def build_graphs(
     jobs: list[SourceJob],
+    max_group_size: int,
     output_dir: Path,
     manifest_path: Path | None,
     log_path: Path | None,
@@ -864,7 +946,12 @@ def build_graphs(
     paths = [
         plot_source_summary(jobs, output_dir),
         plot_runtime_fit(jobs, output_dir),
-        plot_forecast_error_fit(jobs, output_dir),
+        plot_forecast_error_fit(
+            jobs,
+            output_dir,
+            manifest_path=manifest_path,
+            cluster_results_path=cluster_results_path,
+        ),
         plot_log_forecast_error_fit(jobs, output_dir),
     ]
     if manifest_path and manifest_path.exists():
@@ -874,15 +961,14 @@ def build_graphs(
         if overhead:
             paths.append(overhead)
     if cluster_results_path:
-        spread = plot_cluster_runtime_spread(cluster_results_path, output_dir)
-        if spread:
-            paths.append(spread)
         planned_actual = plot_cluster_planned_actual_by_job(
-            cluster_results_path, output_dir
+            cluster_results_path, output_dir, max_group_size
         )
         if planned_actual:
             paths.append(planned_actual)
-        overhead_by_job = plot_cluster_overhead_by_job(cluster_results_path, output_dir)
+        overhead_by_job = plot_cluster_overhead_by_job(
+            cluster_results_path, output_dir, max_group_size
+        )
         if overhead_by_job:
             paths.append(overhead_by_job)
         actual_error = plot_actual_error_fit(
