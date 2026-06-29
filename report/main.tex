@@ -1,6 +1,8 @@
 \documentclass[a4paper,14pt]{extarticle}
 \input{tex/lib/barrel.tex}
 
+\AddToHook{begindocument/before}{\makeatletter}
+\AddToHook{begindocument/end}{\makeatother}
 \begin{document}
 
 \include{tex/pages/титульник}

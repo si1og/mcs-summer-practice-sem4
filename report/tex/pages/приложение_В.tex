@@ -1,7 +1,7 @@
-\section*{Приложение В. Код генератора пакетных заданий}
+\section*{Приложение В. Код генератора пользовательских заявок}
 \phantomsection
 \label{app:generator-code}
-\addcontentsline{toc}{section}{Приложение В. Код генератора пакетных заданий}
+\addcontentsline{toc}{section}{Приложение В. Код генератора пользовательских заявок}
 
 \renewcommand{\theFancyVerbLine}{%
     \scriptsize\ttfamily\textcolor{gray}{\arabic{FancyVerbLine}}%
@@ -11,6 +11,6 @@
 
 \inputminted[linenos, numbersep=10pt, firstnumber=1, fontsize=\scriptsize, breaklines]{python}{code/generator_main.py}
 
-Файл \mintinline{text}{generate/template.py} формирует текст пакетного файла SLURM для отдельного задания.
+Файл \mintinline{text}{generate/template.py} формирует текст сценария SLURM для отдельного задания.
 
 \inputminted[linenos, numbersep=10pt, firstnumber=1, fontsize=\scriptsize, breaklines]{python}{code/generator_template.py}
