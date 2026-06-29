@@ -380,7 +380,6 @@ def plot_forecast_error_fit(
     manifest_path: Path | None = None,
     cluster_results_path: Path | None = None,
     bins: int = 40,
-    log_base: float = math.e,
 ) -> Path:
     plt = _import_pyplot()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -391,9 +390,6 @@ def plot_forecast_error_fit(
         actual_errors = _cluster_actual_errors_from_manifest(
             _read_cluster_runtime_rows(cluster_results_path), manifest_path
         )
-
-    mixture = fit_lognormal_mixture(errors, component_count=2)
-    log_mixture = _rescale_lognormal_mixture(mixture, log_base)
 
     x_values = errors + actual_errors if actual_errors else errors
     x_limits = _main_x_limits(x_values, upper_quantile=0.98)
@@ -421,22 +417,12 @@ def plot_forecast_error_fit(
             alpha=0.55,
             label="фактические ошибки прогноза",
         )
-    _plot_pdf(
-        ax,
-        mixture,
-        errors,
-        histogram_bins,
-        label="смесь логнормальных распределений",
-        x_limits=x_limits,
-    )
     ax.set_title("Распределение ошибки прогноза времени")
     ax.set_xlabel("прогноз - время выполнения, секунд")
     ax.set_ylabel("количество задач")
     ax.set_xlim(*_padded_x_limits(x_limits))
     ax.legend()
 
-    text = _mixture_text(log_mixture)
-    ax.text(0.02, 0.95, text, transform=ax.transAxes, va="top", fontsize=9)
     _style_large_plot(fig, ax)
     fig.savefig(path, dpi=160)
     plt.close(fig)
@@ -999,7 +985,6 @@ def build_graphs(
             output_dir,
             manifest_path=manifest_path,
             cluster_results_path=cluster_results_path,
-            log_base=log_base,
         ),
         plot_log_forecast_error_fit(jobs, output_dir, log_base=log_base),
     ]
