@@ -219,6 +219,39 @@ def _plot_normal_mixture_pdf(
     )
 
 
+def _log_values(values: list[float] | list[int], base: float) -> list[float]:
+    if base <= 0 or base == 1:
+        raise ValueError("log base must be positive and not equal to 1")
+    return [math.log(value, base) for value in values]
+
+
+def _log_axis_label(base: float, expression: str) -> str:
+    if math.isclose(base, math.e):
+        return f"ln({expression})"
+    if float(base).is_integer():
+        return f"log{int(base)}({expression})"
+    return f"log base {base:g}({expression})"
+
+
+def _rescale_lognormal_mixture(
+    mixture: LognormalMixture, base: float
+) -> LognormalMixture:
+    if math.isclose(base, math.e):
+        return mixture
+    scale = math.log(base)
+    return LognormalMixture(
+        components=tuple(
+            LognormalFit(
+                mu=component.mu / scale,
+                sigma=component.sigma / scale,
+                count=component.count,
+            )
+            for component in mixture.components
+        ),
+        weights=mixture.weights,
+    )
+
+
 def _mixture_text(mixture: LognormalMixture) -> str:
     return "\n".join(
         f"комп. {index}: mu={component.mu:.4f}, sigma={component.sigma:.4f}, вес={weight:.3f}"
@@ -347,6 +380,7 @@ def plot_forecast_error_fit(
     manifest_path: Path | None = None,
     cluster_results_path: Path | None = None,
     bins: int = 40,
+    log_base: float = math.e,
 ) -> Path:
     plt = _import_pyplot()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -359,6 +393,8 @@ def plot_forecast_error_fit(
         )
 
     mixture = fit_lognormal_mixture(errors, component_count=2)
+    log_mixture = _rescale_lognormal_mixture(mixture, log_base)
+
     x_values = errors + actual_errors if actual_errors else errors
     x_limits = _main_x_limits(x_values, upper_quantile=0.98)
     histogram_bins = _compact_hist_bins(
@@ -399,7 +435,7 @@ def plot_forecast_error_fit(
     ax.set_xlim(*_padded_x_limits(x_limits))
     ax.legend()
 
-    text = _mixture_text(mixture)
+    text = _mixture_text(log_mixture)
     ax.text(0.02, 0.95, text, transform=ax.transAxes, va="top", fontsize=9)
     _style_large_plot(fig, ax)
     fig.savefig(path, dpi=160)
@@ -408,14 +444,16 @@ def plot_forecast_error_fit(
 
 
 def plot_log_forecast_error_fit(
-    jobs: list[SourceJob], output_dir: Path, bins: int = 40
+    jobs: list[SourceJob], output_dir: Path, bins: int = 40, log_base: float = math.e
 ) -> Path:
     plt = _import_pyplot()
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / "log_forecast_error_fit.png"
     errors = forecast_errors(jobs)
-    log_errors = [math.log(value) for value in errors]
-    mixture = fit_forecast_error_lognormal_mixture(jobs)
+    log_errors = _log_values(errors, log_base)
+    mixture = _rescale_lognormal_mixture(
+        fit_forecast_error_lognormal_mixture(jobs), log_base
+    )
     x_limits = _main_x_limits(log_errors, upper_quantile=0.98)
 
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -430,7 +468,7 @@ def plot_log_forecast_error_fit(
     )
     _plot_normal_mixture_pdf(ax, mixture, log_errors, bins, x_limits=x_limits)
     ax.set_title("Распределение логарифма ошибки прогноза времени")
-    ax.set_xlabel("ln(TimelimitRaw * 60 - ElapsedRaw)")
+    ax.set_xlabel(_log_axis_label(log_base, "TimelimitRaw * 60 - ElapsedRaw"))
     ax.set_ylabel("количество задач")
     ax.set_xlim(*_padded_x_limits(x_limits))
     ax.legend()
@@ -643,14 +681,18 @@ def plot_actual_error_fit(
     output_dir: Path,
     manifest_path: Path | None = None,
     bins: int = 30,
+    log_base: float = math.e,
 ) -> Path | None:
     plt = _import_pyplot()
     rows = _read_cluster_runtime_rows(results_path)
     errors = _cluster_actual_errors_from_manifest(rows, manifest_path)
+
     if len(errors) < 2:
         return None
 
     mixture = fit_lognormal_mixture(errors, component_count=2)
+    log_mixture = _rescale_lognormal_mixture(mixture, log_base)
+
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / "actual_error_fit.png"
     x_limits = _main_x_limits(errors)
@@ -680,7 +722,7 @@ def plot_actual_error_fit(
     ax.set_xlim(*_padded_x_limits(x_limits))
     ax.legend()
 
-    text = _mixture_text(mixture)
+    text = _mixture_text(log_mixture)
     ax.text(0.02, 0.95, text, transform=ax.transAxes, va="top", fontsize=9)
     _style_large_plot(fig, ax)
     fig.savefig(path, dpi=160)
@@ -693,6 +735,7 @@ def plot_log_actual_error_fit(
     output_dir: Path,
     manifest_path: Path | None = None,
     bins: int = 30,
+    log_base: float = math.e,
 ) -> Path | None:
     plt = _import_pyplot()
     rows = _read_cluster_runtime_rows(results_path)
@@ -700,8 +743,10 @@ def plot_log_actual_error_fit(
     if len(errors) < 2:
         return None
 
-    mixture = fit_lognormal_mixture(errors, component_count=2)
-    log_errors = [math.log(value) for value in errors]
+    mixture = _rescale_lognormal_mixture(
+        fit_lognormal_mixture(errors, component_count=2), log_base
+    )
+    log_errors = _log_values(errors, log_base)
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / "log_actual_error_fit.png"
     x_limits = _main_x_limits(log_errors)
@@ -719,7 +764,9 @@ def plot_log_actual_error_fit(
     )
     _plot_normal_mixture_pdf(ax, mixture, log_errors, histogram_bins, x_limits=x_limits)
     ax.set_title("Фактическое распределение логарифма ошибки прогноза времени")
-    ax.set_xlabel("ln(расчетный прогноз из manifest - фактическое время)")
+    ax.set_xlabel(
+        _log_axis_label(log_base, "расчетный прогноз из manifest - фактическое время")
+    )
     ax.set_ylabel("количество задач")
     ax.set_xlim(*_padded_x_limits(x_limits))
     ax.legend()
@@ -941,6 +988,7 @@ def build_graphs(
     manifest_path: Path | None,
     log_path: Path | None,
     cluster_results_path: Path | None = None,
+    log_base: float = math.e,
 ) -> list[Path]:
     clean_graphs_dir(output_dir)
     paths = [
@@ -951,8 +999,9 @@ def build_graphs(
             output_dir,
             manifest_path=manifest_path,
             cluster_results_path=cluster_results_path,
+            log_base=log_base,
         ),
-        plot_log_forecast_error_fit(jobs, output_dir),
+        plot_log_forecast_error_fit(jobs, output_dir, log_base=log_base),
     ]
     if manifest_path and manifest_path.exists():
         paths.append(plot_generated_vs_source(jobs, manifest_path, output_dir))
@@ -972,12 +1021,18 @@ def build_graphs(
         if overhead_by_job:
             paths.append(overhead_by_job)
         actual_error = plot_actual_error_fit(
-            cluster_results_path, output_dir, manifest_path=manifest_path
+            cluster_results_path,
+            output_dir,
+            manifest_path=manifest_path,
+            log_base=log_base,
         )
         if actual_error:
             paths.append(actual_error)
         log_actual_error = plot_log_actual_error_fit(
-            cluster_results_path, output_dir, manifest_path=manifest_path
+            cluster_results_path,
+            output_dir,
+            manifest_path=manifest_path,
+            log_base=log_base,
         )
         if log_actual_error:
             paths.append(log_actual_error)

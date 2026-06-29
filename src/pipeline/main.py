@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,15 @@ def positive_int(value: str) -> int:
     parsed = int(value)
     if parsed <= 0:
         raise argparse.ArgumentTypeError("value must be positive")
+    return parsed
+
+
+def log_base(value: str) -> float:
+    if value.lower() in {"e", "natural", "ln"}:
+        return math.e
+    parsed = float(value)
+    if parsed <= 0 or parsed == 1:
+        raise argparse.ArgumentTypeError("log base must be positive and not equal to 1")
     return parsed
 
 
@@ -68,6 +78,11 @@ def parse_args() -> argparse.Namespace:
         help="Skip graph generation after analysis.",
     )
     parser.add_argument("--count", type=positive_int, help="Override configured count.")
+    parser.add_argument(
+        "--log-base",
+        type=log_base,
+        help="Override logarithm base for log-scale graphs. Use 10 for decimal logarithm or e for natural logarithm.",
+    )
     parser.add_argument("--remote-run-dir", help="Use an existing generated run on VM.")
     return parser.parse_args()
 
@@ -85,6 +100,11 @@ def main() -> None:
         args.count if args.count is not None else int(generator_config.get("count", 20))
     )
     max_group_size = int(analyze_config.get("max_group_size", 50))
+    graph_log_base = (
+        args.log_base
+        if args.log_base is not None
+        else log_base(str(analyze_config.get("log_base", math.e)))
+    )
     graphs_dir = Path(analyze_config.get("graphs_dir", "generated/graphs"))
     results_root = Path(cluster_config.get("results_root", "generated/cluster_runs"))
 
@@ -176,6 +196,7 @@ def main() -> None:
         log_path=None,
         cluster_results_path=cluster_results_path,
         max_group_size=max_group_size,
+        log_base=graph_log_base,
     )
     for path in graph_paths:
         print(f"graph={path}")
